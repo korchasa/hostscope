@@ -1,0 +1,22 @@
+# What the compiler leaves behind.
+/target
+
+# Local to this machine, not to the project: the host the live check runs on,
+# and the working directories of the editors and tools used on it.
+local.mk
+.claude/
+.foxcode/
+
+# macOS and editors.
+.DS_Store
+.vscode/
+.idea/
+
+# Secrets. The application reads none of them - it opens no process environment
+# and no file for writing (FR-10) - so these rules guard against a stray file
+# in the working directory rather than against anything the project produces.
+.env
+.env.*
+*.pem
+*.key
+*.crt

@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""Layer V4 of the testing document: the frame linter, for frames captured off a
+live terminal.
+
+The same invariants the Rust tests run over `--dump-frame` output, applied to
+what `tmux capture-pane -pN` returns. Every frame any scenario produces goes
+through this, rather than it being a test of its own.
+
+usage: frame-lint.py FILE...        one frame per file, or several separated by
+                                    blank lines inside one file
+"""
+
+import re
+import sys
+import unicodedata
+
+CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+# The glyphs `bar` in src/util.rs draws with: a full block and the seven partial
+# ones, so that a value too small for a whole block still shows something.
+TICKS = "█▉▊▋▌▍▎▏"
+
+
+# The cells a line takes, from Python's own Unicode tables. This is the second
+# opinion on the width of a character: the application reads the `unicode-width`
+# crate, this reads `unicodedata`, and a frame is only accepted when both agree.
+# Ambiguous-width characters (the box drawing of the frame, Cyrillic) count as
+# one, which is what a terminal does unless it is told otherwise.
+def width_of(line):
+    total = 0
+    for ch in line:
+        if unicodedata.combining(ch):
+            continue
+        total += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return total
+
+
+# The character index at which a cell column begins.
+#
+# Every column offset below is read off the header, which is ASCII, and there a
+# cell is a character. A row is not: a name in a wide script takes two cells per
+# letter, so slicing a row by the header's character index lands one character
+# short per wide letter. That is how this linter reported a name leaving its
+# column on a frame that was exactly the width of the terminal - and it can hide
+# a real overrun just as easily, by landing inside the name instead of after it.
+def cell_index(line, column):
+    total = 0
+    for i, ch in enumerate(line):
+        if total >= column:
+            return i
+        if unicodedata.combining(ch):
+            continue
+        total += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return len(line)
+
+
+def lint(frame, name):
+    bad = []
+    if not frame:
+        return [f"{name}: the frame is empty"]
+
+    # 1. Every line takes the same number of cells - the width of the terminal.
+    widths = {width_of(line) for line in frame}
+    if len(widths) != 1:
+        counts = sorted(widths)
+        bad.append(f"{name}: lines of different width: {counts}")
+    width = max(widths)
+
+    for i, line in enumerate(frame):
+        # 2. Nothing that drives the terminal reaches the frame (FR-12). A
+        # letter of any script is fine; a control character is not.
+        if CONTROL.search(line):
+            bad.append(f"{name}: line {i} carries a control character: {line!r}")
+        # 11. No panic reaches the screen.
+        if "panicked" in line or "RUST_BACKTRACE" in line:
+            bad.append(f"{name}: a panic reached the frame: {line!r}")
+
+    # 9. The path line is present and labelled with its level.
+    if len(frame) > 4 and not re.search(r"L[0-3]\b", frame[4]):
+        bad.append(f"{name}: the path line carries no level: {frame[4]!r}")
+    # 10. The measurement mode is labelled with the window it was taken over.
+    if len(frame) > 2 and not re.search(r"INSTANT |AVG over |PAUSED", frame[2]):
+        bad.append(f"{name}: the window is not labelled: {frame[2]!r}")
+
+    if len(frame) < 8 or "NAME" not in frame[6]:
+        return bad  # a card is open: the table invariants do not apply
+
+    header = frame[6]
+    # Every level draws every column, in this order.
+    order = ["NAME", "OWNER", "TASKS", "CORES", "MEM"]
+    at = 0
+    for column in order:
+        pos = header.find(column, at)
+        if pos < 0:
+            bad.append(f"{name}: column {column} is missing or out of order")
+            return bad
+        at = pos + len(column)
+    owner_col = header.find("OWNER")
+    mem_col = header.find("MEM") - 4
+    cpu_end = header.find("CORES") + 5
+
+    # Which column the bar is drawn beside, read off the path line (D-27). The
+    # names on that line are the sortings, not the column headings, so they are
+    # mapped rather than looked up.
+    sort_name = re.search(r"sort:\s*(\w+)", frame[4] if len(frame) > 4 else "")
+    sort_head = {
+        "cores": "CORES",
+        "memory": "MEM",
+        "tasks": "TASKS",
+        "disk": "DISK",
+        "net": "NET",
+    }.get(sort_name.group(1) if sort_name else "", "CORES")
+    sort_end = header.find(sort_head)
+    sort_end = sort_end + len(sort_head) if sort_end >= 0 else 0
+    wide_enough_for_a_bar = "DISK" in header and "NET" in header
+
+    rows = frame[7:-4]
+    for i, row in enumerate(rows):
+        # Every offset is a cell column, so every slice of a row goes through
+        # cell_index. A row carries names; the header does not.
+        owner_at = cell_index(row, owner_col)
+        name_cell = row[cell_index(row, 2):owner_at]
+        if not name_cell.strip():
+            continue
+        # 4. A name never leaves its column.
+        if row[owner_at - 1] != " ":
+            bad.append(f"{name}: row {i} runs into the owner column: {row!r}")
+        # 12. The marker of a node with children is a column of its own.
+        if not (name_cell.startswith("> ") or name_cell.startswith("  ")):
+            bad.append(f"{name}: row {i} has no marker column: {row!r}")
+        # 5. The (self) row, when present, is the first row of the level.
+        if name_cell.strip() == "(self)" and i != 0:
+            bad.append(f"{name}: the (self) row is at {i}, not first")
+        # 7. A non-zero value draws at least one tick of the bar.
+        #
+        # The bar is not a column of its own: since D-27 it is a strip drawn
+        # beside the column the table is ordered by, and the path line says
+        # which that is. Reading it always beside CORES was right only while
+        # CORES was the only column that carried it - on a frame sorted by
+        # memory the strip sits beside MEM, and the rule then reported every
+        # busy row as drawing no tick.
+        # A narrow terminal drops the bar on purpose - the cells go to the name,
+        # which is worth more there - so the rule only applies where there was
+        # room for one. What says there was room is the frame itself: the bar is
+        # the last thing to go, after the disk and the network columns, so a
+        # frame still drawing both was wide enough to draw a bar. Reading that
+        # off the frame rather than recomputing the application's own width
+        # arithmetic keeps the check independent of the thing it checks.
+        if wide_enough_for_a_bar:
+            end = sort_end if sort_end else cpu_end
+            value_at = cell_index(row, end)
+            cell = row[cell_index(row, max(0, end - 8)):value_at].strip().rstrip("%")
+            try:
+                value = float(cell.rstrip("GMK"))
+            except ValueError:
+                value = 0.0
+            if value > 0 and not any(c in TICKS for c in row[value_at:]):
+                bad.append(f"{name}: row {i} shows {value} and draws no tick: {row!r}")
+
+    if width < 20:
+        bad.append(f"{name}: the frame is {width} wide")
+    return bad
+
+
+def frames_of(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read().rstrip("\n")
+    blocks = [b for b in text.split("\n\n") if b.strip()]
+    return [b.split("\n") for b in blocks]
+
+
+def main():
+    files = sys.argv[1:]
+    if not files:
+        print(__doc__)
+        return 2
+    problems = []
+    total = 0
+    for path in files:
+        for n, frame in enumerate(frames_of(path)):
+            total += 1
+            problems += lint(frame, f"{path}#{n}")
+    print(f"linter: {total} frames, {len(problems)} problems")
+    for p in problems:
+        print("  " + p)
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

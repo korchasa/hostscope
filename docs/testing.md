@@ -1,0 +1,548 @@
+# hostscope: how to verify the application
+
+Date: 2026-08-14. Status: working procedure.
+Every command in this document was executed on the Docker rig on
+2026-08-14 and returned the result described. Anything unverified is
+marked "not verified".
+
+## 1. Why this document
+
+The application draws a full screen in a terminal, runs as root and
+takes almost all of its numbers from the state of a live host. None of
+these three properties can be checked by reading code. What is needed is
+a way to run the application for real, press keys, read the drawn screen
+as text and compare the numbers against an independent source. This
+document describes that way and the order in which it is applied.
+
+## 2. The rigs
+
+Two rigs are used, and the host they run on is given to the commands
+below rather than written into them: `make live HOST=<name>`.
+
+The Kubernetes rig - Ubuntu 24.04.4, kernel 6.8, 6 cores, 15 GB of
+memory, cgroup v2 with the controllers
+`cpuset cpu io memory hugetlb pids rdma misc`, about 210 processes and
+89 cgroup nodes. The container runtime is containerd under microk8s:
+the node `kubepods` is in the tree and six pods run in it. The test
+account has passwordless `sudo`. Available: `tmux 3.4`, `strace`,
+`systemd-run`, `python3`, `jq`. Rust is not installed, and neither is
+Docker.
+
+The absence of Docker is what tells this rig apart from the Docker rig,
+where every check up to 2026-08-15 was run: there about 20 Docker
+containers run under the systemd driver and the socket is readable, here
+there is no socket at all. So the two rigs answer different questions
+and neither replaces the other:
+
+- The Kubernetes rig gives the Kubernetes and containerd shape, which
+  until now was only checked offline over the fixture of D-23, and it
+  gives the degraded case of FR-3 for real: containers are on the host,
+  the socket is not there, and the name has to fall back to the short
+  identifier.
+- The Docker rig gives the Docker shape and the socket, so the container
+  name arrives from the enrichment rather than from the cgroup path. The
+  induced state "a container with a 120 character name" needs it: there
+  is nothing to raise that state with on the Kubernetes rig.
+
+Differences from the reference host, the machine the requirements were
+measured on: there it is 128 cores and Ubuntu 22.04. The figures of
+section 6 of the requirements (300 ms to first screen, 50 ms per frame)
+are measured on the reference host; on the rigs above they are only
+checked for order of magnitude and for absence of regression.
+
+Both are live machines with services running on them. The rules for
+handling them are in section 10.
+
+## 3. The feedback loop
+
+The application runs in a detached `tmux` session with a fixed window
+size. Keys are sent with `send-keys`, the screen is read with
+`capture-pane`. Verified on `htop`: a sorting change by the `M` key is
+visible in the captured text.
+
+```sh
+# start; the window size is set explicitly
+tmux new-session -d -s hs-run -x 100 -y 30 'sudo -n /tmp/hostscope/hostscope --log /tmp/hostscope/app.log'
+
+# keystrokes
+tmux send-keys -t hs-run Right      # deeper
+tmux send-keys -t hs-run Escape     # back
+tmux send-keys -t hs-run a          # switch measurement mode
+
+# the screen as plain text, with no control sequences
+tmux capture-pane -p  -t hs-run
+
+# the same, keeping trailing spaces - for the grid check
+tmux capture-pane -pN -t hs-run
+
+# the same with colours - for selection and the dimmed (self) row
+tmux capture-pane -pe -t hs-run
+
+# the whole output stream into a file - for counting bytes per frame
+tmux pipe-pane -o -t hs-run 'cat >> /tmp/hostscope/stream.raw'
+tmux pipe-pane -t hs-run          # switch off
+```
+
+What matters about these commands:
+
+- `capture-pane -p` returns ready text. There is no need to parse
+  control sequences, and that is the main reason to choose `tmux` over
+  `ssh -tt` with output stripping.
+- Without `-N` trailing spaces are cut, so the check "exactly 100
+  characters in a line" produces false positives without it.
+- `-e` returns colours. That is the only way to check that the `(self)`
+  row is drawn dimmed and the selected row is drawn selected.
+- `pipe-pane` writes exactly what the application sent to the terminal.
+  That is where bytes per frame come from, and the answer to whether the
+  whole screen is repainted every time. For `htop` two seconds produced
+  1256 bytes and not a single screen-clearing sequence.
+- A pause between the keystroke and the capture is always needed:
+  `python3 -c "import time; time.sleep(1.5)"`. A capture taken right
+  after `send-keys` catches the old frame.
+
+That last property is what made `tmux` the expensive way to walk a
+scenario, and it is why the walks no longer go through it. The pause has
+to cover a tick, the tick is a second, so every key cost 1.3 seconds and
+a walk of twenty one keys cost half a minute. A key program costs its
+length in ticks and waits for nothing at all:
+
+```sh
+# the same walk, with no terminal and no pause anywhere in it
+hostscope --keys "m Down Enter Down i Escape v Space" --dump-frame 8 \
+          --tick 150 --size 100x30
+```
+
+Measured on the Kubernetes rig on 2026-08-15, the walk of twenty one
+keys: 29.6
+seconds through `tmux`, 8.3 seconds as a key program including a short
+`tmux` pass kept alongside it, and 2.9 seconds for the key program on
+its own at a tick of 100 ms. The frames are written under the numbering
+`tmux` used, so a check that reads frame `-04` reads the same frame it
+did before.
+
+What a key program gives up is the terminal: these frames are what the
+application printed, not what a terminal displayed. So `tmux` stays in
+three places, and only there - the terminal sizes and the resize on the
+fly, where a terminal is the thing under test; the spike of FR-13, where
+an event has to arrive from outside while the application keeps running;
+and a two key pass next to the main walk, which is what says a real
+terminal draws the frame the dump drew. Without that last one the whole
+layer would have quietly stopped checking terminals at all.
+
+The same applies to waiting for an induced load. `pause 4` after a
+`systemd-run` was a reserve with nothing behind it: measured on the same
+day, the scope is in `/sys/fs/cgroup` and its `cpu.stat` counter is
+above zero in under 20 ms. What the check waits for now is that fact,
+plus one collection tick so the application has looked at the host once
+since the load started.
+
+The build happens on the Mac and cross-compiles to the host: the target
+`x86_64-unknown-linux-musl` is installed there and `.cargo/config.toml`
+links it with `rust-lld` and `link-self-contained`, so no musl toolchain
+and no Docker are needed. Measured on 2026-08-15: a release build of the
+target takes 49 seconds from scratch and 6.5 seconds after an edit, and
+produces a 918 KB static binary which needs nothing installed on the
+host.
+
+Building, shipping and running are one command, `make live`, and not
+three. The three were `ssh mkdir`, `scp` and `ssh bash host-check.sh`,
+each a round trip with a wait and a decision in between. Counted over
+the session transcripts of this project on 2026-08-15: 130 trips to the
+host against 11 full runs, and a median verification round of 5.7
+minutes of which the commands were running 40 percent of the time - the
+rest went on assembling the next command. `make live-bg` detaches the
+run on the host and `make live-log` collects it, so the four minutes are
+spent working rather than watching.
+
+An earlier version of this paragraph said the target was not installed
+on the Mac and advised building natively on the rig. That is no
+longer true, and the round trip through `rsync` is not needed.
+
+## 4. What the code must provide for verification
+
+Without these hooks verification comes down to parsing ASCII off the
+screen, and that cannot tell an arithmetic error from a layout error.
+They are now in the requirements as FR-17 (operator decision
+2026-08-14); here is how they are used.
+
+- `--cgroup-root DIR` and `--proc-root DIR` - read a captured snapshot
+  instead of the live `/sys/fs/cgroup` and `/proc`. Gives repeatable
+  tests with no live host involved.
+- `--docker-socket PATH|none` - substituting and disabling the socket,
+  the acceptance of FR-3 and D-13.
+- `--dump-model json` - print the tree model as numbers to standard
+  output and exit. Comparison against the oracle runs over this output,
+  not over screen text.
+- `--dump-frame N` - render N frames as text to standard output and
+  exit. Gives a layout check with no terminal and no `tmux`.
+- `--keys "Right Right a Escape"` - run a key program and stop. A
+  scenario becomes a single command.
+- `--tick MS` - a fixed collection tick, so that the averaging window is
+  known exactly (FR-13, FR-15). Since D-27 it also sets the interval the
+  interactive run opens at, which `-` and `+` then move; a dumped frame
+  says the tick it was run with rather than the default.
+- `--log FILE` - the log goes to a file only. A log in the terminal
+  ruins the frame. The same log carries the collection time and the
+  render time of every frame: there is no way to measure them from
+  outside (section 9).
+
+Dumps go to standard output rather than to files: FR-10 forbids writing
+outside the settings file, and a hook for tests is no reason to make an
+exception.
+
+## 5. Layers of verification
+
+A check may not take its truth from the thing it checks. Where a check
+needs a table, a formula or a constant that the application also needs,
+the two must read different sources - the application its own, the check
+an independent one. Two copies of one source are one source: when it is
+wrong, both are wrong together and the check reports success. This is
+why widths are read from the `unicode-width` crate on the Rust side and
+from Python's `unicodedata` in `scripts/frame-lint.py` (D-18), and why
+the oracle in V2 parses the kernel files itself instead of calling into
+the application.
+
+V1. **Offline over a snapshot.** A snapshot of the `/proc` files the
+application reads and of `cgroup.procs` across the hierarchy is written
+out as a fixture, and the application is started with `--proc-root` and
+`--cgroup-root`. Deterministic, runs on the Mac and in CI. Covers FR-1,
+FR-5, FR-6, FR-13, FR-14, FR-15, FR-20.
+
+The fixtures are built in code (`tests/support/mod.rs`) rather than
+stored as files: what has to be checked is a shape - which process has
+which parent, which cgroup holds which process - and a shape written in
+code can be read next to the assertion about it. Three of them are the
+layouts of Docker with the cgroupfs driver, of a Kubernetes node and of
+a plain server with the systemd driver, copied from captures of the
+three real environments (D-23) and used by
+`tests/environment_shapes.rs`; the captures themselves weighed 7.5 MB.
+
+Capturing what a cgroup snapshot needs, now that only one file per
+cgroup is read:
+
+```sh
+sudo find /sys/fs/cgroup -maxdepth 4 -type f -name 'cgroup.procs' \
+  -exec sh -c 'd=/tmp/hostscope/snap$(dirname {}); mkdir -p "$d"; cat {} > "$d/$(basename {})"' \;
+```
+
+A fixture is written twice with a known pause between them: a pair is
+needed to check the deltas (FR-15) and both measurement modes (FR-13).
+
+V2. **An oracle on the live host.** A separate Python script reads the
+same kernel files and computes the totals with its own code: it builds
+the process forest out of its own reading of `/proc/<pid>/stat` and sums
+each subtree itself. It must share no code with the application -
+otherwise it repeats the application's error. It is compared against
+`--dump-model json`. The tolerances come from the requirements: 1
+percent across the tree (FR-1), widened to what a live host actually
+swings by, and 5 percent for the core sum against `1 - idle` from
+`/proc/stat` (FR-1a).
+
+V3. **Scenarios through tmux.** A walk down the forest and back, the
+card on every level, sorting, search, filter, pause. What is checked is not only
+the final screen but also that `Esc` returns to the same row (FR-2) and
+that the filter survives a level change (FR-6).
+
+V4. **The frame linter.** The set of invariants from section 7 is run
+over every frame captured by any test, rather than as a test of its own.
+This is the main source of findings: one scenario yields 10-15 frames,
+and each is checked against a dozen rules for free.
+
+A frame check proves nothing until the frame it captured is the frame it
+meant to capture. A key program that stops one card short, or a fixture
+that leaves `fd/`, `limits`, `smaps_rollup` or `net/tcp` unwritten,
+produces an empty card - and an empty card passes every invariant a
+broken one would fail. Assert one line of the expected content by name
+before asserting anything about the whole frame.
+
+V5. **Induced states.** Host states are created deliberately (section
+8): a spike, a steady load, a known quota, many nodes, disappearing
+processes, long names, an unavailable Docker socket, absence of root.
+
+V6. **Non-functional measurements** (section 9).
+
+V7. **Security and read-only.** FR-9: start a process with the variable
+`HS_CANARY=<known string>`, walk the scenario down to the card of that
+process, and search for the string in every frame and in the log -
+neither the value nor the name `HS_CANARY` may appear, because the
+environment is not read at all. The same `strace` run proves it from the
+other side: no `openat` of a `/proc/<pid>/environ`. FR-10: `strace -f -e
+trace=execve,openat -o /tmp/hostscope/strace.log` around the whole run,
+then check that there was exactly one `execve` - our own - and that no
+`openat` for writing went outside the settings file.
+
+## 6. The procedure for a single run
+
+1. **Preparation.** Create `/tmp/hostscope`, capture the host state
+   before the run: `docker ps --format '{{.Names}}'`, `systemctl
+   list-units --failed`, `free -m`, `uptime`. Save it to a file.
+2. **Delivery.** Build, put the binary at `/tmp/hostscope/hostscope`,
+   write the version and the hash next to it.
+3. **Baseline.** Start the application in `tmux` with no load at all,
+   capture the first frame. Check FR-15: every value derived from
+   cumulative counters is zero right after start.
+4. **Oracle.** Capture `--dump-model json` and a `/proc` reading at the
+   same moment. Compare the numbers. A mismatch beyond the tolerance is
+   an arithmetic defect: stop here and go to step 8.
+5. **Scenario.** Run the key program step by step. After every
+   keystroke: pause, `capture-pane -p`, `capture-pane -pe`, and save the
+   frame with the step number and the key pressed in the file name.
+6. **Linter.** Run the invariants of section 7 over every saved frame.
+7. **Induced state.** Raise the state needed from section 8, repeat
+   steps 4-6, remove the load.
+8. **Analysis.** Turn every mismatch into a dossier (section 11).
+9. **Cleanup.** Kill the session, remove the load, delete the slice,
+   compare the host state against the one recorded in step 1.
+
+Steps 3-6 are worth running after every code change: they take under a
+minute and catch layout regressions that the eye does not see.
+
+## 7. The frame linter: invariants
+
+Every invariant is checked on any frame and refers to a requirement.
+
+1. All lines inside the frame take the same number of terminal cells,
+   equal to the terminal width (section 11 of the requirements). Cells,
+   not characters: a name in a wide script takes two cells per letter.
+   The linter counts them with Python's `unicodedata` while the
+   application counts them with the `unicode-width` crate (D-18), so a
+   frame passes only when two independent tables agree. Capture with
+   `-N`.
+2. The frame contains no control character (FR-12), the data area
+   included. Letters are not restricted: since D-17 a container name or
+   a command line is shown in its own script, and the induced state
+   "non-ASCII name" in section 8 checks exactly that.
+3. Neither the frame nor the log contains the canary string, the name of
+   a canary variable, or anything resembling `NAME=value` from the
+   environment (FR-9).
+4. Columns are separated by at least one space on every line, and no
+   name leaves its column (section 11). In cells, as in invariant 1: the
+   column offsets are read off the header, which is ASCII, and a row is
+   not, so both linters turn a column back into an index through the same
+   width tables they measure the line with. Found on 2026-08-15 - the
+   offsets were read as character indexes, and a name in a wide script
+   made the check report an overrun on a frame that was exactly the width
+   of the terminal, and would have hidden a real one just as readily.
+5. The `(self)` row, when present, is the first row of the level under
+   each of the four sortings (FR-14).
+6. The sum of the rows shown equals the parent value for every quantity
+   (FR-1, FR-14). Taken from `--dump-model`, not from the text.
+7. A non-zero value draws at least one tick of the bar (section 11), and
+   the bar stands beside the column the rows are ordered by and nowhere
+   else (D-27). Which column that is comes off the path line, not from a
+   fixed offset: reading it always beside `CORES` was right only while
+   `CORES` was the only column that carried one, and on a frame sorted
+   by memory it reported every busy row as drawing no tick.
+8. The column set and order are the same on every level (section 11).
+9. The path line is present and labelled with the level it is on, `L0`
+   and down (FR-12).
+10. The measurement mode is labelled with its window: `INSTANT 1.0s` or
+    `AVG over ...` (FR-13).
+11. Neither the frame nor the log contains a panic, a backtrace or the
+    word `panicked`.
+12. A node with children is marked in its name with `>`, a node without
+    children is not (section 11, D-20).
+13. The path line names the view the rows come from - `view: tree` or
+    `view: list` (FR-18). Invariant 6 - the rows add up to the parent -
+    holds in both: the list shows the ends of the subtree, which are the
+    parent split up rather than a second reading of it.
+14. Every CPU figure is a core count: the column is headed `CORES` and
+    no percentage appears anywhere on the frame (FR-1a, D-25).
+
+## 8. Induced states
+
+Load is created through `systemd-run --scope` with its own slice: it
+gets a separate cgroup node with known limits, which immediately gives
+an expected number to compare against. Verified: `CPUQuota=50%` yields
+`cpu.max = 50000 100000`, the node appears in
+`/sys/fs/cgroup/hs.slice/`, `cpu.stat` grows, and after the run the node
+disappears on its own.
+
+```sh
+# exactly half a core for 30 seconds; the screen must show 0.500 cores
+sudo systemd-run --scope --slice=hs -p CPUQuota=50% --unit=hs-steady -q \
+  timeout 30 python3 -c 'while True: pass'
+```
+
+- **A known CPU quota** - the check for FR-1a: the application must show
+  0.500 cores, not a percentage of an unclear base.
+- **A spike against a steady load** - the acceptance of FR-13:
+  `hs-steady` with a 20 percent quota runs all the time, `hs-spike` with
+  100 percent lives for 3 seconds. In instant mode the spike comes
+  first, in average mode the steady load does.
+- **Memory** - `-p MemoryMax=200M` and a script holding 150 MB: the
+  check that the row shows the resident memory of the process and that
+  the difference from the children total went into `(self)` (FR-14).
+- **Disk** - `dd if=/dev/zero of=/tmp/hostscope/io bs=1M count=200
+  oflag=direct` inside its own scope, compared against
+  `/proc/<pid>/io`. The same load run against a hostscope started
+  without root is the FR-8 case: the file belongs to its owner, so the
+  figure has to come back unavailable rather than as a zero.
+- **Container network** - a container named `hs-net` pulling data: the
+  check for FR-11 through `/proc/<pid>/net/dev` in its namespace.
+- **Many nodes** - 200 short-lived processes at once, each a copy of
+  `sleep` under its own name so the search has something to find: the
+  check for sorting and search (FR-6) and for frame time on a full
+  tree.
+- **Disappearing processes** - a loop of short `sleep` calls: the check
+  that the application does not crash on a vanished `/proc/<pid>` and
+  that the work of dead children settles into `(self)`, as FR-14 states.
+- **Long names** - a container with a 120-character name and a process
+  with a very long command line: the check for ellipsis truncation and
+  for columns not merging.
+- **A non-ASCII name** - a container named `hs-имя-по-русски` and a
+  process with a Cyrillic argument. The letters are expected to reach
+  the table, the card and the path line as they are (FR-12, D-17), a
+  search for that substring finds the row, and the frame linter passes:
+  the columns are measured in cells, so this is where a width error
+  would show first. Docker refuses to create a container under a
+  non-ASCII name, so on a live host only the process side of this state
+  can be raised; the container side is raised offline, over a fixture.
+- **Without root** - the same run as an ordinary user: fields are marked
+  `n/a` and the application does not crash (FR-8, D-13). There is a
+  subtlety here: on the Docker rig the user is a member of the `docker`
+  group, so without `sudo` the socket is still reachable. To reproduce
+  the conditions of section 8a of the requirements, a separate user without
+  that group is needed, or `--docker-socket none`.
+- **Docker unavailable** - `--docker-socket none`: the row shows the
+  short identifier and an unavailability marker (FR-3).
+- **Terminal size** - 60x20, 100x30, 200x60 and resizing on the fly with
+  `tmux resize-window`.
+
+## 9. Non-functional measurements
+
+- **To the first screen.** `pipe-pane` is switched on before the start,
+  and the time between the start and the first complete frame in the
+  stream is measured. The 300 ms threshold is measured on the reference
+  host; on the rigs the number is recorded for reference.
+- **Frame time.** Not measurable from outside: `capture-pane` shows the
+  result, not the duration. That is why the application writes the
+  collection time and the render time of every frame into the log
+  (FR-17), and the check takes the 95th percentile over 60 seconds of
+  that log.
+- **Own usage.** Start the application inside `systemd-run --scope
+  --slice=hs --unit=hs-app` and read `cpu.stat` and `memory.current` of
+  its node from outside. The application then sees itself as a `(self)`
+  row on the top level - which doubles as a check that it does not hide
+  its own usage.
+- **Output volume per frame.** `pipe-pane` into a file for 10 seconds,
+  bytes divided by the number of frames. Separately check that the
+  screen clear does not arrive on every frame: for `htop` it did not
+  arrive once in two seconds.
+
+## 10. Ground rules on a live host
+
+Both rigs are live machines with services running on them, and the
+services have users. The rules are mandatory on either.
+
+- Everything of ours is named with the `hs-` prefix: the `tmux` session
+  `hs-run`, the slice `hs.slice`, the units `hs-*`, the containers
+  `hs-*`, the directory `/tmp/hostscope`.
+- Other people's containers and units are never touched: no stopping, no
+  restarting, no changing of limits. Our own containers are started with
+  `--rm` only.
+- Load is always bounded: `CPUQuota` no higher than 100 percent - one
+  core out of the six on the Kubernetes rig, out of the four on the
+  Docker rig -
+  `MemoryMax` no higher than 1 GB, and always under `timeout`. On a
+  machine of this size an unbounded load is noticeable to the users of
+  the services.
+- The `tmux` session is killed by name before the start, not wholesale:
+  the user may have more sessions. On 2026-08-14 there were none.
+- A run ends with cleanup: `tmux kill-session -t hs-run`,
+  `sudo rmdir /sys/fs/cgroup/hs.slice`, removal of `/tmp/hostscope`. An
+  empty slice does not disappear on its own - verified, it had to be
+  removed by hand.
+- After the cleanup the host state is compared against the one captured
+  in step 1: the same container list, no new failed units.
+- An induced load is stopped before the check waits for it. `wait` waits
+  for the background `systemd-run`, and that does not return until the
+  `timeout` inside the scope runs out, so a section that had finished its
+  work in eight seconds still sat there until the load expired. Measured
+  on 2026-08-15: five sections did this, and stopping the scope first
+  took the whole run from about five minutes to three. What made it
+  invisible is that nothing failed - the run was simply slow, and a slow
+  run reads as a thorough one. Later the same day the walks moved off
+  `tmux` and the waits for a load became waits for its counter, which
+  took the run from three minutes to under two, and the sections added
+  since fit inside what was freed: 37 checks now run in 112 seconds
+  against the 29 that took 172. Of what is left, the
+  averaging window of FR-13, the oracle's ten seconds and the twenty of
+  the measurements are not overhead: they are the measurements.
+- Two checks that need the same induced state share it. The quota of
+  FR-1a and the spike of FR-13 both need a process burning a known
+  fraction of a core, and the same is true of the timings and the own
+  usage of section 9. Raising the state twice costs a second window and,
+  worse, makes two figures describe two different runs that only look
+  comparable.
+- Every section prints what it cost. The run takes minutes, and the only
+  way to know which minute is worth paying for is to see where it goes.
+
+## 11. The defect dossier
+
+A mismatch is useless without the material needed to reproduce it.
+Collect it immediately, in one directory:
+
+- the frame in two forms: `capture-pane -pN` and `capture-pane -pe`;
+- `--dump-model json` of the same moment;
+- a `/sys/fs/cgroup` snapshot of the same moment;
+- the application log, and the `strace` output if it was enabled;
+- the binary version, the terminal size, the key program up to the
+  failure.
+
+Then minimisation: reproduce it offline over the snapshot with
+`--cgroup-root`. If it reproduces, the snapshot becomes a fixture and
+the check becomes a test in the repository; this is a regression, and it
+will not come back. If it does not reproduce over the snapshot, the
+defect is tied to timing or to a race, and it has to be looked for in
+the collection order rather than in the arithmetic.
+
+## 12. What is not checked automatically
+
+Screen readability, the appropriateness of colour accents, the clarity
+of the hints, and whether the screen answers "who is eating the
+resources" within a minute. That is checked by eye over `-e` captures
+and against the mandatory rules of section 11 of the requirements. The
+linter catches layout, not meaning.
+
+## 13. Mapping to the requirements
+
+| Requirement | How it is checked |
+| --- | --- |
+| FR-1, FR-5 | V1 over the snapshot, V2 against the oracle, invariant 6 |
+| FR-1a | Induced state with a known quota, oracle against `/proc/stat`, invariant 14 |
+| FR-2 | V3: a walk down the forest and back on `Enter` and `BSpace`, the card on every level with `i`, return to the same row |
+| FR-3 | Induced state `--docker-socket none`, a run without root |
+| FR-6 | V1 over a snapshot with 200 nodes, induced state "many nodes"; V4: a filter typed, kept and dropped - the path line names it and counts what it left, `Esc` gives the level back; V4: the bar stands beside the sorted column (D-27) |
+| FR-7 | V3: pause, two consecutive frames match, after release they do not; V4: `-` and `+` walk the interval to both ends of the list and the key line says which one is on |
+| FR-8 | Induced state "without root" with a separate user |
+| FR-9 | V7: a canary in the environment, searched across frames and log; no `environ` in the `openat` trace |
+| FR-10 | V7: `strace` on `execve` and `openat`, plus the build-time check |
+| FR-11 | Induced state "container network"; for host processes the unavailability marker |
+| FR-12 | Invariant 2 on every frame, induced state "non-ASCII name" (FR-4 was withdrawn by D-17) |
+| FR-13 | Induced state "spike against steady load", two snapshots with a known pause |
+| FR-14 | Invariants 5 and 6, induced states "memory" and "disappearing processes" |
+| FR-15 | Step 3 of the procedure, a snapshot with a non-zero base |
+| FR-16 | Withdrawn by D-24 |
+| FR-17 | Two runs over one snapshot give an identical dump; the `openat` trace |
+| FR-18 | V4: the list scenario `v / r e d i s Enter` over the snapshot, invariants 1-13; the interface walk of the live check presses `v` |
+| FR-19 | Withdrawn by D-24 |
+| FR-20 | V1 over the three environment shapes: every container named on every process it runs, the filter finding those processes by the container name and by the kind of owner; every owner the model names is on a drawn row |
+| D-25 | V1: a chain of single children is one row named for the whole chain, and its card names every link with its pid - over a chain of seven under a six-digit pid, at two widths, because a short chain and a three-digit pid are the two sizes at which a lost link stays invisible; V4: a card that cannot hold it says how many lines it hid, checked at the height that holds the card exactly and one line below it, because a guard on a comparison is wrong by one line at a time; V4: a pid too wide for its room is marked as cut, at four widths from 24 cells up, because a silent cut names another process; V3: the walk uses `Enter`, `BSpace` and `i` |
+| D-26 | Invariant 8: the `OWNER` column is demanded on every frame, no longer only where it happens to be drawn |
+| Section 6 | Section 9 of this document |
+
+## 14. Link to the requirements
+
+Everything this document demanded of the requirements has been written
+into them:
+
+- FR-17 - the verification hooks of section 4, together with writing the
+  collection time and the render time of a frame into the log: without
+  that the 50 ms threshold cannot be checked.
+- D-15 and then D-17 - what a frame may carry from data. D-15 escaped
+  every non-ASCII character; D-17 replaced that with removing control
+  characters and counting widths in cells. That is where the induced
+  state "non-ASCII name" and the wording of invariant 2 come from.
+
+No open questions about verification remain.
