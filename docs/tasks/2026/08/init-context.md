@@ -84,5 +84,7 @@ know before touching anything:
    line.
 4. The one check that still cannot run everywhere is the container with a
    120-character name: it needs a host with Docker, not the containerd rig.
-5. Publication is not done: the repository has no remote. Before adding one,
-   check that nothing new names a machine.
+5. The repository lives at `github.com/korchasa/hostscope` and is private for
+   now. Before it is opened to everyone, check once more that nothing names a
+   real machine or account — including the example commands inside these
+   documents.
