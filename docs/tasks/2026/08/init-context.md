@@ -66,7 +66,9 @@ check comes from `local.mk`, which is not in the repository.
   - Test: `scripts/host-check.sh`
   - Evidence: `make live HOST=<host>` — last run 37 passed, 0 failed, 1 skipped
 - [x] Nothing in the repository names a real machine or account
-  - Evidence: `git grep -niE '\.lan|4bet|playmecorp|stas[._]ops' | wc -l` prints 0
+  - Evidence: a case-insensitive `git grep` for the host names, the domain
+    suffixes and the account names that the earlier documents used finds
+    nothing; the list itself is deliberately not written down here.
 
 ## Solution
 
