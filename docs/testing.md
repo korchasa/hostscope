@@ -187,7 +187,8 @@ They are now in the requirements as FR-17 (operator decision
   outside (section 9).
 
 Dumps go to standard output rather than to files: FR-10 forbids writing
-outside the settings file, and a hook for tests is no reason to make an
+outside the log named on the command line, and a hook for tests is no
+reason to make an
 exception.
 
 ## 5. Layers of verification
@@ -269,7 +270,7 @@ environment is not read at all. The same `strace` run proves it from the
 other side: no `openat` of a `/proc/<pid>/environ`. FR-10: `strace -f -e
 trace=execve,openat -o /tmp/hostscope/strace.log` around the whole run,
 then check that there was exactly one `execve` - our own - and that no
-`openat` for writing went outside the settings file.
+`openat` for writing went outside the log named on the command line.
 
 ## 6. The procedure for a single run
 

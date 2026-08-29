@@ -222,7 +222,8 @@ neither its value nor its name appears in any frame or log line, and an
 all.
 
 FR-10. Read only. The application runs no external commands, writes
-nothing outside its own settings file and has no action that changes the
+nothing outside the log named on the command line and has no action that
+changes the
 state of the host: no killing processes, no changing limits, no
 restarting containers. Running as root makes this requirement mandatory
 rather than desirable.
@@ -370,8 +371,8 @@ a layout error; how the hooks are used is described in
   the 50 ms threshold of section 6 is unverifiable.
 
 Dumps go to standard output rather than to files: FR-10 forbids writing
-outside the settings file, and a verification hook is no reason to make
-an exception.
+outside the log named on the command line, and a verification hook is no
+reason to make an exception.
 Acceptance: two runs with `--cgroup-root` over the same snapshot produce
 an identical `--dump-model json`; `--dump-frame` works with no terminal,
 writing to a file; an `openat` trace of a run with any set of hooks
