@@ -1496,6 +1496,12 @@ worth carrying next to the requirements:
   instant and average is the diagnosis: a spike shows as a divergence, a
   steady load as a match. Every figure has a label of its own on the left
   edge, and no line holds a second labelled value (D-32).
+- Every memory row on the card says what its number counts. RSS, virtual
+  and PSS stand under one another and measure three different things, so
+  a reader who takes them for one number reads the card wrong: RSS counts
+  a shared page in full for every process that maps it, virtual is
+  address space rather than memory held, and PSS divides a shared page
+  among those that map it (D-32).
 - On the card a value too wide for the room wraps under its own label,
   and the cgroup path wraps with the rest: a path with its tail cut off
   names no unit `systemctl` would answer about (D-33).

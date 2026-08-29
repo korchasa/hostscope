@@ -469,6 +469,38 @@ fn the_card_labels_every_fact_and_wraps_what_does_not_fit() {
     );
 }
 
+/// Every memory row on the card says what its number counts. Three of them
+/// stand under one another - RSS, virtual and PSS - and they measure three
+/// different things, so a reader who takes them for one number reads the card
+/// wrong. Only PSS carried an explanation.
+#[test]
+fn every_memory_row_says_what_its_number_counts() {
+    let f = Fixture::new("card-memory");
+    build(&f);
+    f.process_extras(101, 20, 2, 4400);
+    let card = scenario(&f, "v / s s h d Enter i", "120x40")
+        .last()
+        .unwrap()
+        .clone();
+    let text = card.join("\n");
+    for label in ["memory RSS", "own virtual", "own PSS"] {
+        let at = card
+            .iter()
+            .position(|l| l.starts_with(&format!("\u{2502}  {label} ")))
+            .unwrap_or_else(|| panic!("no {label} row in:\n{text}"));
+        // The two figure columns take fifty cells. The explanation stands past
+        // them, or on the line below when the terminal is too narrow for it.
+        let tail: String = card[at].chars().skip(51).collect();
+        let under: String = card[at + 1].chars().skip(20).collect();
+        let said = |s: &str| s.trim_matches([' ', '\u{2502}']).len() > 10;
+        assert!(
+            said(&tail) || said(&under),
+            "the {label} row explains nothing: {:?}",
+            card[at]
+        );
+    }
+}
+
 /// The explanations on the card are text like any other, and a narrow terminal
 /// used to cut them mid-word against the border - the reader saw "shared pages
 /// divid" and had nothing to do with it. They wrap now (D-33).
@@ -491,7 +523,7 @@ fn the_card_wraps_its_explanations_instead_of_cutting_them() {
             .join(" ");
         let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
         for phrase in [
-            "shared pages divided between those that map them",
+            "shared pages divided among those that map them",
             "attributed to the namespace, not to the process",
         ] {
             assert!(

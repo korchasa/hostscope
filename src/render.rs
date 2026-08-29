@@ -1249,8 +1249,14 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
         },
         or_na(node.instant.mem, mem_str),
         or_na(node.avg.mem, mem_str),
+        // What the number counts, not only whose it is: RSS counts a shared
+        // page in full for every process that maps it, which is why the PSS
+        // two rows below is smaller and why a column of RSS values sums to
+        // more memory than the host has.
         if node.kind == Kind::Process && !node.children.is_empty() {
-            "with children"
+            "with children; shared pages counted in full"
+        } else if node.kind == Kind::Process {
+            "resident pages, shared ones counted in full"
         } else {
             ""
         },
@@ -1263,7 +1269,7 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
             "own virtual",
             or_na(node.detail.vsz, mem_str),
             String::new(),
-            "",
+            "address space mapped, not memory held",
             &mut lines,
         );
         if let Some(pss) = app.card_extras.as_ref().and_then(|e| e.pss) {
@@ -1271,7 +1277,7 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
                 "own PSS",
                 mem_str(pss),
                 String::new(),
-                "shared pages divided between those that map them",
+                "shared pages divided among those that map them",
                 &mut lines,
             );
         }
