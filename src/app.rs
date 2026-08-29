@@ -157,6 +157,49 @@ pub struct App {
     pub quit: bool,
     pub table_rows: usize,
     pub scroll: usize,
+    /// Which palette the screen is drawn in. An index into `theme::THEMES`
+    /// rather than the palette itself: the renderer reads it once a frame, and
+    /// `t` walks it.
+    pub theme: usize,
+}
+
+/// When the screen is written whole rather than as a difference against the
+/// last frame.
+///
+/// The drawing library writes only the cells that changed, which is what keeps
+/// the output per frame inside the bound of section 6. That is right as long as
+/// what is on the terminal is what the program last wrote - and it is not
+/// always. Found on 2026-08-29: `sudo` runs the program in a pseudo-terminal of
+/// its own and relays the bytes to the terminal the reader is looking at, and
+/// what the relay loses stays on the screen until every cell is written again.
+/// The reader saw a frame of nonsense and had to find a key that happened to
+/// rewrite every row (D-38).
+pub struct Repaint {
+    every: std::time::Duration,
+    last: Option<std::time::Instant>,
+}
+
+impl Repaint {
+    pub fn new(every: std::time::Duration) -> Repaint {
+        Repaint { every, last: None }
+    }
+
+    /// True when the span has passed since the last time it was true. The
+    /// clock is passed in rather than read here, so the rule can be tested
+    /// without waiting for it.
+    pub fn due(&mut self, now: std::time::Instant) -> bool {
+        match self.last {
+            None => {
+                self.last = Some(now);
+                false
+            }
+            Some(last) if now.duration_since(last) >= self.every => {
+                self.last = Some(now);
+                true
+            }
+            Some(_) => false,
+        }
+    }
 }
 
 impl App {
@@ -181,6 +224,7 @@ impl App {
             quit: false,
             table_rows: 12,
             scroll: 0,
+            theme: 0,
         }
     }
 
@@ -588,6 +632,11 @@ impl App {
             // its own. `=` is the unshifted key `+` sits on.
             Key::Char('-') | Key::Char('_') => self.step_down(),
             Key::Char('+') | Key::Char('=') => self.step_up(),
+            Key::Char('t') => {
+                self.theme = (self.theme + 1) % crate::theme::THEMES.len();
+                let t = &crate::theme::THEMES[self.theme];
+                self.flash = format!("theme: {} - {}", t.name, t.about);
+            }
             Key::Char('q') => self.quit = true,
             _ => {}
         }
@@ -922,5 +971,47 @@ mod tests {
             ]
         );
         assert!(Key::program("Nope").is_err());
+    }
+
+    /// The switcher is what makes a palette comparable: two themes side by
+    /// side in one session beat two builds a minute apart.
+    #[test]
+    fn the_theme_key_walks_the_palettes_and_comes_back() {
+        let proc = std::path::Path::new("/proc");
+        let mut app = App::new(tree());
+        let first = app.theme;
+        let n = crate::theme::THEMES.len();
+        for _ in 0..n {
+            app.on_key(Key::Char('t'), proc);
+        }
+        assert_eq!(app.theme, first, "the switcher did not come back round");
+        app.on_key(Key::Char('t'), proc);
+        assert_eq!(app.theme, (first + 1) % n);
+        assert!(
+            app.flash.contains(crate::theme::THEMES[app.theme].name),
+            "the switch is silent: {:?}",
+            app.flash
+        );
+    }
+
+    /// The screen can go stale through no fault of this program, so it is
+    /// written whole now and then. The rule is the one thing about that worth
+    /// testing: due once when the span has passed, and not again until the
+    /// next one.
+    #[test]
+    fn a_full_repaint_falls_due_once_a_span_and_not_oftener() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let mut r = Repaint::new(Duration::from_secs(3));
+        assert!(!r.due(t0), "a repaint fell due before anything was drawn");
+        assert!(!r.due(t0 + Duration::from_millis(2999)));
+        assert!(
+            r.due(t0 + Duration::from_secs(3)),
+            "the span passed unnoticed"
+        );
+        // Rearmed from the moment it fell due, not from the start, so a run
+        // that was busy does not answer twice in a row.
+        assert!(!r.due(t0 + Duration::from_millis(3001)));
+        assert!(r.due(t0 + Duration::from_secs(6)));
     }
 }

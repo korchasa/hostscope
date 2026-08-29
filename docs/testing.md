@@ -352,6 +352,11 @@ Every invariant is checked on any frame and refers to a requirement.
 15. The swap column, where a frame has one, stands between `MEM` and
     `DISK`. It is the one optional column - a host that has swapped
     nothing draws no `SWAP` at all (D-35).
+16. The header holds its places: the `MEM`, `SWAP` and `LOAD` labels of
+    the two summary lines sit at the same cell in every frame of one run.
+    This is the one invariant read across frames rather than inside one,
+    because a header that moves can only be seen by comparing two of
+    them (D-39).
 
 ## 8. Induced states
 
@@ -439,11 +444,12 @@ passed, none failed, one skipped, in 113 seconds. The frame linter went
 over 133 frames rather than the 29 the `tmux` walks used to produce -
 spelling a filter one key per frame yields a frame per letter, and each
 one is checked against every invariant for free. A 50 percent quota
-showed as 0.502 cores, the search found its node among 615, collection
-took 41.5 ms at the 95th percentile and a redraw 1.0 ms, the first frame
-arrived after 15.6 ms, the application sent 470 bytes per frame with no
-full screen clear in 20 seconds, and it spent 3.22 percent of one core
-and 1.2 MB on itself. That rig has swapped nothing, so it draws no swap
+showed as 0.496 cores, the search found its node among 617, collection
+took 40.6 ms at the 95th percentile and a redraw 0.8 ms, the first frame
+arrived after 16.0 ms, the application sent 1313 bytes per frame with
+five full screen clears in 20 seconds - the repaint of D-38, which was
+not in the binary of the run before this one - and it spent 1.97 percent
+of one core and 1.2 MB on itself. That rig has swapped nothing, so it draws no swap
 column and pays nothing for it (D-35): the figure is the same as before
 the column existed. `strace` showed one `execve`, no file opened for
 writing and no `/proc/<pid>/environ` opened at all.
@@ -564,6 +570,9 @@ linter catches layout, not meaning.
 | D-34 | V1 over a snapshot: the card of a process whose `VmSwap` says 2048 kB shows `own swap  2.0M`, and the card of a process with no `status` file shows the row with `n/a` rather than leaving it out |
 | D-35 | V1 over two snapshots: a host whose `SwapFree` is below its `SwapTotal` draws a `SWAP` column between `MEM` and `DISK` carrying the `VmSwap` of the row, and a host whose swap device is untouched draws no such column. Invariant 15 of `scripts/frame-lint.py` holds the position of the column on every captured frame |
 | D-36 | V1 over a snapshot holding a root process whose `status` carries no `VmSwap` line: its row shows a zero rather than `n/a`, and the `(self)` row of the level is a number rather than an unknown. A process whose `status` cannot be read at all still shows `n/a` on the card |
+| D-37 | Unit tests over the palette: every theme is reachable by the name it ships under, no theme puts a band colour or its own text colour on the ground of its selected row, and the first theme is still the sixteen terminal names. A unit test over the renderer walks all eight and checks that each reaches both the frame line and the ground of the selected row. `--theme` takes a name and refuses one it does not know; `HOSTSCOPE_THEME` takes a name and ignores one it does not know |
+| D-38 | A unit test over the timer: the first call is not due, a call before the span is not due, and a call after it is due once. On the host, `tmux pipe-pane` over 20 seconds counts the bytes and the full clears at the three second and the one second interval, and section 6a carries what it counted |
+| D-39 | A unit test over the renderer draws the header twice, with the same host at two magnitudes of every figure, and demands that `MEM`, `SWAP` and `LOAD` land on the same cell both times. Invariant 16 of `scripts/frame-lint.py` holds the same across the frames of every captured run |
 | Section 6 | Section 9 of this document |
 
 ## 14. Link to the requirements

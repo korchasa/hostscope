@@ -530,7 +530,7 @@ bash host-check.sh measurements
 | Start to first screen | under 300 ms | 29.6 ms |
 | Redraw | under 50 ms | 0.7 ms at the 95th percentile |
 | Collection per tick | (no target) | 47.3 ms at the 95th percentile |
-| Output per frame over SSH | bounded by the screen | 454 bytes per frame, no full clear in 20 s |
+| Output per frame over SSH | bounded by the screen | 454 bytes per frame, no full clear in 20 s - taken before the repaint of D-38. After it, on the Kubernetes rig: 1313 bytes per frame and five clears in 20 s (section 9 of the testing document) |
 | Own memory | under 100 MB | 1.8 MB |
 | Own CPU | under 4 percent of one core | 3.11 percent |
 
@@ -1469,6 +1469,99 @@ made an absent `VmSwap` line an unknown.
   under it and said `n/a` about a machine with 8 GB in swap - and it
   would have said it on every host, since every host has kernel threads.
 
+D-37. The colours of the screen are a palette, and the reader picks it.
+DECIDED 2026-08-29 by the operator.
+
+- Until now colour was not a decision but the absence of one: the
+  renderer named the sixteen terminal colours, so the screen came out in
+  whatever the reader's terminal made of those names. That is the right
+  default and a bad only option - it cannot be judged, because no two
+  terminals draw it the same way.
+- A palette is data now (`src/theme.rs`): a name, a line about itself,
+  and the thirteen roles the screen uses. Eight of them ship. `classic`
+  is the sixteen names, unchanged and still the default, so a reader who
+  asks for nothing sees exactly the screen they saw before. `panel` is
+  written for this screen - a grey chassis and one orange. The other six
+  are the terminal schemes readers already live in, in their published
+  colours: gruvbox, solarized, nord, dracula, tokyo night and
+  catppuccin.
+- A scheme names fewer tones than this screen uses. Where one is missing
+  - the line of the frame, the label of a column, the pale path in front
+  of a selected name - the tone is chosen inside that scheme's own range
+  and by one rule: the frame is the darkest of the three, the label
+  above it, the text above that.
+- Rejected: a palette that lights the selected row in the accent. It
+  reads well, and it costs the bar on that row - the accent is also a
+  band colour, so the bar had to be drawn in a fixed dark colour to be
+  seen at all. The colour of a bar is a reading (D-20), and a reading
+  that changes meaning with the palette is worse than a dull row. A unit
+  test now refuses any palette that puts a band colour on the ground of
+  the selected row.
+- The choice is made three ways: `--theme NAME` on the command line, the
+  `HOSTSCOPE_THEME` variable, and the `t` key while running. The flag
+  out-votes the variable, and a flag that was not given out-votes
+  nothing. An unknown name on the command line is refused; an unknown
+  name in the variable is ignored, because the variable is written once
+  in a shell profile and read on every host, and a host whose binary is
+  older than the name in it must still start.
+
+D-38. The screen is written whole every three seconds. DECIDED
+2026-08-29 by the operator, after a frame of nonsense on a live host.
+
+- The drawing library writes only the cells that changed, which is what
+  keeps the output per frame inside the bound of section 6. That is right
+  only while what the terminal holds is what this program last wrote.
+- It is not always. Measured on the Kubernetes rig on 2026-08-29: `sudo`
+  runs the program in a pseudo-terminal of its own - `use_pty`, on by
+  default in recent versions - and relays the bytes to the terminal the
+  reader is looking at. The relay's own pseudo-terminal is a second
+  device with its own size, and what it loses stays on the screen,
+  because the next frame is a difference against a buffer that says
+  those cells are already right. The reader saw a frame of nonsense and
+  got out of it by pressing a key that happened to rewrite every row.
+- The cost is measured, not guessed. On that rig at 120 by 30 over 20
+  seconds: at the three second interval the application opens at, 484
+  bytes a frame and no full clear becomes 1704 bytes a frame and four
+  clears; at a one second interval, 246 becomes 745 and five clears.
+  Three and a half times the output over SSH, for a screen that repairs
+  itself within three seconds instead of waiting for a keystroke that
+  happens to rewrite every row.
+- The rule of section 6 still holds: a repaint on four frames of
+  thirteen, or five of forty-one, is not a repaint on every frame.
+- The alternative was a key the reader presses. It was rejected because
+  it asks the reader to know that the screen is lying to them, which is
+  exactly what a stale screen makes hard.
+
+D-39. Every figure of the header holds a place of its own width.
+DECIDED 2026-08-29 by the operator, who watched the header move under
+its own numbers.
+
+- The two summary lines are drawn afresh on every tick, and every figure
+  in them changes: busy cores, the two percentages, memory, swap, the
+  rates and the three load numbers. A figure written at its natural
+  width pushes everything to its right by a cell whenever it gains a
+  digit, so `MEM`, `SWAP` and `LOAD` are somewhere else on the next
+  frame and the eye has to find them again. It reads as the screen
+  shaking.
+- Each figure now holds a place wide enough for the range a host
+  actually reaches: six cells for busy cores, which covers a machine of
+  a hundred and more; six for the CPU percentage, up to `100.0%`; six
+  for memory and for swap; four for the two percentages beside the bars;
+  eleven for a rate, which is `1023.9 GB/s`, the widest this can be; and
+  five for each load number.
+- A figure wider than its place takes the room it needs rather than
+  losing a digit. A header that moves once on an extraordinary machine
+  is better than one that quietly cuts a number - which is what the old
+  `pad_left` did on a host of more than a hundred cores.
+- The rates are padded on the right and everything else on the left. A
+  rate is read with the arrow that names it, and a number pushed six
+  cells away from its arrow reads as belonging to nothing; the rest are
+  columns of figures, which line up on the right.
+- The cost is twenty cells on the second line. At a hundred cells and
+  wider everything still fits; at eighty the load segment now gives way,
+  which is what the narrowest-segment rule of that line already provides
+  for.
+
 ## 10. Definition of done
 
 The work is finished when:
@@ -1548,6 +1641,17 @@ worth carrying next to the requirements:
   column is not drawn at all and the cells go to the name (D-35).
 - The bar is not a column of its own but a strip beside the column the
   rows are ordered by, and it moves with the sorting (D-27).
+- Every figure of the header holds a fixed place, so that the labels
+  beside it stand still while the numbers change. A figure too wide for
+  its place takes the room it needs rather than losing a digit (D-39).
+- The colours of the screen are a palette the reader picks, and the one
+  it opens in names the sixteen terminal colours rather than fixing them:
+  a reader who asks for nothing keeps the screen their own terminal theme
+  draws (D-37).
+- No palette may put the colour of a band on the ground of the selected
+  row. The bar keeps its own colour on every row and in every palette,
+  because that colour says whether the row holds a core of its own
+  (D-20, D-37).
 - The details of the selected row go on a separate line under the table,
   not into an extra column. A container image takes a third of the width
   and is needed for one row only.

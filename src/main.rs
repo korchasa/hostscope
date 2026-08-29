@@ -14,6 +14,7 @@ mod logging;
 mod model;
 mod render;
 mod sample;
+mod theme;
 mod util;
 
 use std::io::Write;
@@ -78,6 +79,11 @@ fn run(options: Options) -> Result<(), String> {
         now_secs(),
     );
 
+    // The command line out-votes the environment, and the environment
+    // out-votes the first theme. A flag that was not given must not out-vote
+    // anything (theme.rs).
+    let theme = options.theme.or_else(theme::from_env).unwrap_or(0);
+
     if options.dump_model {
         // The enrichment runs on this thread: two runs over one snapshot must
         // produce an identical dump, and a background thread would race.
@@ -100,6 +106,7 @@ fn run(options: Options) -> Result<(), String> {
         let (w, h) = options.size;
         let mut app =
             App::new(collector.tick(now_secs(), &enricher.snapshot(), enricher.docker_enabled()));
+        app.theme = theme;
         app.table_rows = render::table_rows(h);
         // The dumped frame says how often it would be renewed, and a dump runs
         // at the tick it was given.
@@ -159,6 +166,7 @@ fn interactive(
     let started = Instant::now();
     let mut app =
         App::new(collector.tick(now_secs(), &enricher.snapshot(), enricher.docker_enabled()));
+    app.theme = options.theme.or_else(theme::from_env).unwrap_or(0);
     // `--tick` sets the interval the application opens at; from there `-` and
     // `+` move it, so the tick is a starting point rather than a fixed rate.
     app.set_interval_ms(options.tick_ms);
@@ -166,8 +174,23 @@ fn interactive(
     let mut program = options.keys.clone().into_iter();
     let mut ticks: u64 = 0;
     let mut result = Ok(());
+    // Every three seconds the screen is written whole instead of as a
+    // difference against the last frame. What the difference is drawn against
+    // is not always what the terminal holds - `sudo` relays the output through
+    // a pseudo-terminal of its own - and a lost byte then stays on screen until
+    // every cell is written again (D-38).
+    let mut repaint = app::Repaint::new(Duration::from_secs(3));
 
     loop {
+        if repaint.due(Instant::now()) {
+            // `clear` resets the back buffer as well, so the draw below writes
+            // every cell rather than a difference against a buffer that says
+            // the screen already holds them.
+            if let Err(e) = terminal.clear() {
+                result = Err(format!("cannot clear the screen: {e}"));
+                break;
+            }
+        }
         let render_start = Instant::now();
         let draw = terminal.draw(|f| {
             let area = f.area();

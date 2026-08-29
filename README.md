@@ -35,6 +35,10 @@ usage: hostscope [options]
   --keys "Right a Esc"    run a key program and stop
   --size WxH              frame size for --dump-frame (default 100x30)
   --log FILE              write the log to FILE; never to the terminal
+  --theme NAME            the palette to open in: classic, panel, gruvbox,
+                          solarized, nord, dracula, tokyo-night, catppuccin
+                          (t walks them while running; HOSTSCOPE_THEME sets
+                          the one to open in, and --theme out-votes it)
   -h, --help              this text
   -V, --version           version
 
@@ -66,6 +70,7 @@ keys:
   /                       filter by name, by command line and by owner
   c m d n                 sort
   v                       lay the level out as a flat list of its ends
+  t                       walk the palettes
   a                       switch the measurement window between the average
                           since start and the last interval
   space                   freeze the screen
@@ -80,6 +85,13 @@ are ordered by, so the longest bar is always on the top row.
 
 CPU is measured in busy cores: 0.5 means half a core is busy, 2.0 means two
 cores are.
+
+Eight palettes. 'classic' names the sixteen terminal colours, so the screen
+looks the way the reader's own terminal theme draws them. 'panel' fixes the
+colours instead - a grey chassis, one orange on the sorted column, and the
+selected row as a recessed key. The other six are the terminal schemes their
+readers already live in, in their published colours: gruvbox, solarized,
+nord, dracula, tokyo-night and catppuccin.
 ```
 ## Building
 

@@ -82,6 +82,24 @@ pub fn pad_left(s: &str, n: usize) -> String {
     left
 }
 
+/// Pads on the left to at least `n` cells and never cuts.
+///
+/// The figures of the header change on every tick, and a figure that gains a
+/// digit pushes the label beside it one cell to the right - so the eye has to
+/// find the label again on every frame (D-39). Each of them holds a place wide
+/// enough for the range a host actually reaches; a value wider than its place
+/// takes the room it needs, because a header that moves once an hour is better
+/// than one that quietly drops a digit.
+pub fn pad_num(s: &str, n: usize) -> String {
+    let w = str_width(s);
+    if w >= n {
+        return s.to_string();
+    }
+    let mut out = " ".repeat(n - w);
+    out.push_str(s);
+    out
+}
+
 /// Truncates with an ellipsis to exactly `n` cells, padding when narrower.
 /// Columns must never merge, whatever the name (section 11 of the requirements).
 pub fn fit(s: &str, n: usize) -> String {

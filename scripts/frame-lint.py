@@ -172,6 +172,38 @@ def lint(frame, name):
     return bad
 
 
+def lint_across(frames, name):
+    """16. The header holds its places (D-39).
+
+    Every figure of the two summary lines changes on every tick, and each one
+    is drawn in a place wide enough for it. If a place is too narrow the label
+    beside it moves, and the reader has to find it again on every frame - so
+    the labels are compared across the frames of one run rather than inside
+    one of them.
+    """
+    bad = []
+    places = {}
+    for n, frame in enumerate(frames):
+        head = frame[1:3]
+        for label in ("MEM", "SWAP", "LOAD"):
+            at = None
+            for line in head:
+                i = line.find(label)
+                if i >= 0:
+                    # In cells, not in characters and not in bytes: the line
+                    # carries box drawing, arrows and bar blocks, and the bars
+                    # trade a block for a space as the numbers move.
+                    at = width_of(line[:i])
+                    break
+            first = places.setdefault(label, (at, n))
+            if first[0] != at:
+                bad.append(
+                    f"{name}: {label} sits at {at} in frame {n} "
+                    f"and at {first[0]} in frame {first[1]}"
+                )
+    return bad
+
+
 def frames_of(path):
     with open(path, encoding="utf-8", errors="replace") as f:
         text = f.read().rstrip("\n")
@@ -187,9 +219,11 @@ def main():
     problems = []
     total = 0
     for path in files:
-        for n, frame in enumerate(frames_of(path)):
+        frames = frames_of(path)
+        for n, frame in enumerate(frames):
             total += 1
             problems += lint(frame, f"{path}#{n}")
+        problems += lint_across(frames, path)
     print(f"linter: {total} frames, {len(problems)} problems")
     for p in problems:
         print("  " + p)

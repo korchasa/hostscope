@@ -22,6 +22,10 @@ usage: hostscope [options]
   --keys \"Right a Esc\"    run a key program and stop
   --size WxH              frame size for --dump-frame (default 100x30)
   --log FILE              write the log to FILE; never to the terminal
+  --theme NAME            the palette to open in: classic, panel, gruvbox,
+                          solarized, nord, dracula, tokyo-night, catppuccin
+                          (t walks them while running; HOSTSCOPE_THEME sets
+                          the one to open in, and --theme out-votes it)
   -h, --help              this text
   -V, --version           version
 
@@ -53,6 +57,7 @@ keys:
   /                       filter by name, by command line and by owner
   c m d n                 sort
   v                       lay the level out as a flat list of its ends
+  t                       walk the palettes
   a                       switch the measurement window between the average
                           since start and the last interval
   space                   freeze the screen
@@ -67,6 +72,13 @@ are ordered by, so the longest bar is always on the top row.
 
 CPU is measured in busy cores: 0.5 means half a core is busy, 2.0 means two
 cores are.
+
+Eight palettes. 'classic' names the sixteen terminal colours, so the screen
+looks the way the reader's own terminal theme draws them. 'panel' fixes the
+colours instead - a grey chassis, one orange on the sorted column, and the
+selected row as a recessed key. The other six are the terminal schemes their
+readers already live in, in their published colours: gruvbox, solarized,
+nord, dracula, tokyo-night and catppuccin.
 ";
 
 #[derive(Clone, Debug)]
@@ -80,6 +92,10 @@ pub struct Options {
     pub keys: Vec<Key>,
     pub size: (u16, u16),
     pub log: Option<PathBuf>,
+    /// The palette to open in, when the command line names one. `None` leaves
+    /// the choice to `HOSTSCOPE_THEME` and then to the first theme: a flag
+    /// that is not given must not out-vote the environment.
+    pub theme: Option<usize>,
 }
 
 impl Default for Options {
@@ -94,6 +110,7 @@ impl Default for Options {
             keys: Vec::new(),
             size: (100, 30),
             log: None,
+            theme: None,
         }
     }
 }
@@ -152,6 +169,15 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> 
                 );
             }
             "--log" => o.log = Some(PathBuf::from(value("--log")?)),
+            "--theme" => {
+                let v = value("--theme")?;
+                o.theme = Some(crate::theme::index_of(&v).ok_or_else(|| {
+                    format!(
+                        "--theme: no such theme: {v} (have {})",
+                        crate::theme::names()
+                    )
+                })?);
+            }
             other => return Err(format!("unknown option: {other}")),
         }
     }
@@ -186,6 +212,8 @@ mod tests {
             "Right a Escape",
             "--log",
             "/tmp/app.log",
+            "--theme",
+            "panel",
         ]);
         assert_eq!(o.cgroup_root, PathBuf::from("/tmp/snap/sys/fs/cgroup"));
         assert_eq!(o.docker, Source::Disabled);
@@ -207,5 +235,22 @@ mod tests {
         let o = opts(&[]);
         assert_eq!(o.tick_ms, 3000);
         assert_eq!(o.cgroup_root, PathBuf::from("/sys/fs/cgroup"));
+    }
+
+    #[test]
+    fn the_theme_is_taken_by_name_and_an_unknown_one_is_refused() {
+        let ok = parse(["--theme".to_string(), "panel".to_string()]).unwrap();
+        match ok {
+            Parsed::Run(o) => assert_eq!(o.theme, crate::theme::index_of("panel")),
+            _ => panic!("--theme did not produce a run"),
+        }
+        // Nothing named on the command line leaves the choice to the
+        // environment, which the command line has no business reading.
+        match parse(Vec::<String>::new()).unwrap() {
+            Parsed::Run(o) => assert_eq!(o.theme, None),
+            _ => panic!("an empty command line did not produce a run"),
+        }
+        let bad = parse(["--theme".to_string(), "no-such".to_string()]);
+        assert!(bad.is_err(), "an unknown theme was accepted");
     }
 }

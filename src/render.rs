@@ -2,44 +2,57 @@
 //! makes `--dump-frame` show exactly what the terminal shows, and what lets the
 //! frame invariants of the testing document run without a terminal at all.
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::{App, Row, View};
 use crate::model::{Kind, Metrics, Mode, Node, OwnerKind, Sort};
+use crate::theme;
 use crate::util::{
     bar, bytes_str, char_width, cores_opt, dur_str, fit, fit_left, mem_str, or_na, pad, pad_left,
-    pair_rate_opt, sparkline, str_width, uptime_str,
+    pad_num, pair_rate_opt, sparkline, str_width, uptime_str,
 };
 
 fn frame_style() -> Style {
-    Style::default().fg(Color::Gray)
+    Style::default().fg(theme::current().frame)
 }
 fn dim() -> Style {
-    Style::default()
-        .fg(Color::DarkGray)
-        .add_modifier(Modifier::DIM)
+    let t = theme::current();
+    let s = Style::default().fg(t.label);
+    if t.label_dim {
+        s.add_modifier(Modifier::DIM)
+    } else {
+        s
+    }
 }
+/// The colour of a bar under a tenth of a core, and of the title plate.
 fn teal() -> Style {
-    Style::default().fg(Color::Cyan)
+    Style::default().fg(theme::current().calm)
 }
+/// The accent: the sorted column, and the top band of a bar.
 fn amber() -> Style {
-    Style::default().fg(Color::Yellow)
+    Style::default().fg(theme::current().accent)
 }
 fn red() -> Style {
-    Style::default().fg(Color::Red)
+    Style::default().fg(theme::current().signal)
 }
 fn plain() -> Style {
-    Style::default()
+    match theme::current().ink {
+        Some(c) => Style::default().fg(c),
+        None => Style::default(),
+    }
 }
 /// The selected row is marked with a background rather than with `REVERSED`.
 /// Reversing swaps the colour of the bar with the colour of the line, and the
 /// filled blocks then read as a hole instead of a bar: on the one row an
 /// engineer is looking at, the bar disappeared.
 fn selected() -> Style {
-    Style::default()
-        .bg(Color::DarkGray)
-        .add_modifier(Modifier::BOLD)
+    let t = theme::current();
+    let s = Style::default().bg(t.sel_bg).add_modifier(Modifier::BOLD);
+    match t.sel_fg {
+        Some(c) => s.fg(c),
+        None => s,
+    }
 }
 
 /// The column plan. The set and the order never change with the level (tag N5);
@@ -150,6 +163,11 @@ impl Cols {
 /// 24 by 12 the frame is drawn at 24 by 12 rather than smaller, so a terminal
 /// under that size gets a frame wider and taller than it asked for.
 pub fn frame(app: &App, width: u16, height: u16) -> Vec<Line<'static>> {
+    // The palette is a process-wide setting rather than an argument on every
+    // span, so it is set here: one write a frame, from the state the frame is
+    // drawn out of, and the two cannot disagree (theme.rs).
+    theme::set(app.theme);
+
     let w = width.max(24) as usize;
     let h = height.max(12) as usize;
     let u = w - 2;
@@ -283,17 +301,20 @@ fn summary_cpu(app: &App, u: usize) -> Line<'static> {
             Span::styled(
                 format!(
                     "{} of {} cores ",
-                    pad_left(&format!("{:.2}", busy), 5),
+                    pad_num(&format!("{:.2}", busy), 6),
                     host.cores as u64
                 ),
                 plain(),
             ),
-            Span::styled(format!("{:.1}% ", pct), dim()),
+            Span::styled(format!("{} ", pad_num(&format!("{:.1}%", pct), 6)), dim()),
             Span::styled(sparkline(&host.history, 12), teal()),
             Span::styled("  MEM ", dim()),
-            Span::styled(format!("{} ", mem_str(mem_used)), plain()),
+            Span::styled(format!("{} ", pad_num(&mem_str(mem_used), 6)), plain()),
             Span::styled(bar(mem_frac, 8), teal()),
-            Span::styled(format!(" {:.0}%", mem_frac * 100.0), dim()),
+            Span::styled(
+                format!(" {}", pad_num(&format!("{:.0}%", mem_frac * 100.0), 4)),
+                dim(),
+            ),
         ],
         u,
     )
@@ -339,26 +360,35 @@ fn summary_net(app: &App, u: usize) -> Line<'static> {
         vec![
             Span::styled("  NET ", dim()),
             Span::styled(
+                // The rate keeps its place, and the place is padded on the
+                // right: a number pushed away from the arrow that names it
+                // reads as belonging to nothing. Eleven cells is the widest
+                // this can be - `1023.9 GB/s`.
                 format!(
-                    "\u{2193} {}/s \u{2191} {}/s   ",
-                    bytes_str(rx),
-                    bytes_str(tx)
+                    "\u{2193} {} \u{2191} {}  ",
+                    pad(&format!("{}/s", bytes_str(rx)), 11),
+                    pad(&format!("{}/s", bytes_str(tx)), 11)
                 ),
                 plain(),
             ),
         ],
         vec![
             Span::styled("SWAP ", dim()),
-            Span::styled(format!("{} ", mem_str(swap_used)), plain()),
+            Span::styled(format!("{} ", pad_num(&mem_str(swap_used), 6)), plain()),
             Span::styled(bar(swap_frac, 6), amber()),
-            Span::styled(format!(" {:.0}%   ", swap_frac * 100.0), dim()),
+            Span::styled(
+                format!(" {}   ", pad_num(&format!("{:.0}%", swap_frac * 100.0), 4)),
+                dim(),
+            ),
         ],
         vec![
             Span::styled("LOAD ", dim()),
             Span::styled(
                 format!(
-                    "{:.2} {:.2} {:.2}",
-                    host.load[0], host.load[1], host.load[2]
+                    "{} {} {}",
+                    pad_num(&format!("{:.2}", host.load[0]), 5),
+                    pad_num(&format!("{:.2}", host.load[1]), 5),
+                    pad_num(&format!("{:.2}", host.load[2]), 5)
                 ),
                 plain(),
             ),
@@ -481,8 +511,15 @@ fn table_lines(app: &App, rows: &[Row], u: usize, content: usize, out: &mut Vec<
                 let (base, pale, bar_base) = if idx == app.cursor {
                     (
                         selected(),
-                        Style::default().fg(Color::Gray).bg(Color::DarkGray),
-                        selected(),
+                        Style::default()
+                            .fg(theme::current().sel_label)
+                            .bg(theme::current().sel_bg),
+                        // The background of the selection and nothing else: a
+                        // foreground here would cover the colour of the bar,
+                        // which is a reading rather than decoration (D-20). No
+                        // theme may put a band colour on the selection ground,
+                        // and theme.rs holds that to it.
+                        Style::default().bg(theme::current().sel_bg),
                     )
                 } else if r.node.kind == Kind::Own {
                     (dim(), dim(), Style::default())
@@ -576,7 +613,11 @@ fn marked(text: String, needle: &str, base: Style) -> Vec<Span<'static>> {
     if want.is_empty() || want.len() > folded.len() {
         return vec![Span::styled(text, base)];
     }
-    let hit = base.patch(Style::default().fg(Color::Black).bg(Color::Yellow));
+    let hit = base.patch(
+        Style::default()
+            .fg(theme::current().mark_fg)
+            .bg(theme::current().mark_bg),
+    );
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut at = 0usize;
     let mut cut = 0usize;
@@ -1015,6 +1056,8 @@ fn key_line(app: &App, rows: &[Row], u: usize) -> Line<'static> {
         Span::styled(" sort ", dim()),
         Span::styled("v", view_style),
         Span::styled(" list ", view_dim),
+        Span::styled("t", plain()),
+        Span::styled(" theme ", dim()),
         Span::styled("a", mode_style),
         Span::styled(" avg ", mode_dim),
         Span::styled("space", pause_style),
@@ -1422,6 +1465,58 @@ mod tests {
     use super::*;
     use crate::app::App;
     use crate::model::Snapshot;
+    use ratatui::style::Color;
+
+    /// The header must not move under its own numbers. Every figure in it
+    /// changes on every tick, and a figure that grows by a digit pushes
+    /// everything to its right by a cell - so the label the eye was resting on
+    /// is somewhere else on the next frame (D-39).
+    #[test]
+    fn the_header_keeps_its_places_however_large_the_numbers_are() {
+        const M: f64 = 1024.0 * 1024.0;
+        let places = |scale: f64| -> Vec<usize> {
+            let mut snap = Snapshot::empty();
+            let h = &mut snap.host;
+            h.cores = 64.0;
+            h.busy_cores = 0.07 * scale;
+            h.busy_cores_avg = h.busy_cores;
+            h.mem_total = 512.0 * 1024.0 * M;
+            h.mem_used = 0.9 * M * scale;
+            h.mem_used_avg = h.mem_used;
+            h.swap_total = 64.0 * 1024.0 * M;
+            h.swap_used = 0.4 * M * scale;
+            h.swap_used_avg = h.swap_used;
+            h.net_rx = 3.0 * scale;
+            h.net_tx = 90.0 * scale;
+            h.net_rx_avg = h.net_rx;
+            h.net_tx_avg = h.net_tx;
+            h.load = [0.07 * scale, 0.4 * scale, 2.0 * scale];
+            let app = App::new(snap);
+            let text = to_text(&frame(&app, 110, 30));
+            ["MEM", "SWAP", "LOAD"]
+                .iter()
+                .map(|needle| {
+                    let line = text
+                        .iter()
+                        .find(|l| l.contains(*needle))
+                        .unwrap_or_else(|| panic!("{needle} is not in the header"));
+                    line.chars()
+                        .collect::<Vec<_>>()
+                        .windows(needle.len())
+                        .position(|w| w.iter().collect::<String>() == *needle)
+                        .unwrap()
+                })
+                .collect()
+        };
+        // Four orders of magnitude between the two: bytes to megabytes, a
+        // fraction of a core to twelve of them, a load under one to one over a
+        // hundred.
+        assert_eq!(
+            places(1.0),
+            places(2000.0),
+            "the header moved when its numbers grew"
+        );
+    }
 
     #[test]
     fn every_line_is_exactly_the_terminal_width() {
@@ -1433,6 +1528,41 @@ mod tests {
                 assert_eq!(str_width(line), w as usize, "line {i} at {w}x{h}: {line:?}");
             }
         }
+    }
+
+    /// A palette is only a palette if the screen follows it. Before the theme
+    /// module the colours were named inside the renderer, so there was nothing
+    /// to follow and nothing to compare against.
+    #[test]
+    fn the_frame_is_drawn_in_the_theme_that_is_current() {
+        use crate::theme;
+        let border = |app: &App| {
+            frame(app, 100, 30)[0]
+                .spans
+                .first()
+                .expect("the frame draws a border")
+                .style
+                .fg
+        };
+        let mut app = App::new(Snapshot::empty());
+        app.theme = theme::index_of("classic").unwrap();
+        assert_eq!(border(&app), Some(Color::Gray), "classic left its colour");
+        app.theme = theme::index_of("panel").unwrap();
+        assert_eq!(
+            border(&app),
+            Some(theme::THEMES[1].frame),
+            "the panel theme did not reach the frame"
+        );
+        // And every palette reaches the frame, not only the two that were
+        // written by hand: a scheme added to the array with a role left at the
+        // colour of its neighbour would pass on its name alone.
+        for (i, t) in theme::THEMES.iter().enumerate() {
+            app.theme = i;
+            assert_eq!(border(&app), Some(t.frame), "{} left its frame", t.name);
+            let _ = frame(&app, 100, 30);
+            assert_eq!(selected().bg, Some(t.sel_bg), "{} left its ground", t.name);
+        }
+        theme::set(0);
     }
 
     /// The bar of the selected row is the one thing no linter over drawn text
@@ -1455,20 +1585,21 @@ mod tests {
         let lines = frame(&app, 100, 30);
         let row = lines
             .iter()
-            .find(|l| l.spans.iter().any(|s| s.style.bg == Some(Color::DarkGray)))
+            .find(|l| {
+                l.spans
+                    .iter()
+                    .any(|s| s.style.bg == Some(theme::current().sel_bg))
+            })
             .expect("the selected row is drawn with a background");
         let bar = row
             .spans
             .iter()
             .find(|s| s.content.contains('\u{2588}'))
             .expect("the bar is drawn on the selected row");
-        assert_eq!(
-            bar.style.bg,
-            Some(Color::DarkGray),
-            "the bar left the selection"
-        );
+        let t = theme::current();
+        assert_eq!(bar.style.bg, Some(t.sel_bg), "the bar left the selection");
         assert!(
-            matches!(bar.style.fg, Some(Color::Cyan | Color::Yellow | Color::Red)),
+            [t.calm, t.accent, t.signal].contains(&bar.style.fg.unwrap_or(t.sel_bg)),
             "the bar lost its own colour: {:?}",
             bar.style
         );
