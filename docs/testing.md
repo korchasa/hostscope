@@ -430,6 +430,25 @@ sudo systemd-run --scope --slice=hs -p CPUQuota=50% --unit=hs-steady -q \
   screen clear does not arrive on every frame: for `htop` it did not
   arrive once in two seconds.
 
+**The last full run, on the Kubernetes rig, 2026-08-15.** 37 checks
+passed, none failed, one skipped, in 113 seconds. The frame linter went
+over 133 frames rather than the 29 the `tmux` walks used to produce -
+spelling a filter one key per frame yields a frame per letter, and each
+one is checked against every invariant for free. A 50 percent quota
+showed as 0.489 cores, the search found its node among 616, the worst
+collection on that full tree was 76 ms, the first frame arrived after
+16.0 ms, and the application spent 2.7 percent of one core and 1.0 MB on
+itself. `strace` showed one `execve`, no file opened for writing and no
+`/proc/<pid>/environ` opened at all.
+
+The skipped check is the container with a 120 character name: that rig
+runs containerd under microk8s and has no Docker to raise the state
+with. What it gives instead is the degraded case of FR-3 for real - the
+containers are there, the socket is not, and the name falls back to the
+short identifier. The Docker side of FR-3 and the long container name
+need the Docker rig, where the previous full run passed 30 checks with
+none failed; `make live HOST=<that host>` runs them there.
+
 ## 10. Ground rules on a live host
 
 Both rigs are live machines with services running on them, and the

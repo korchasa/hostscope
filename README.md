@@ -9,16 +9,12 @@ HOST=your.host
 cargo build --release --target x86_64-unknown-linux-musl && ssh "$HOST" 'mkdir -p /tmp/hostscope' && scp target/x86_64-unknown-linux-musl/release/hostscope "$HOST:/tmp/hostscope/" && ssh -t "$HOST" 'sudo /tmp/hostscope/hostscope'
 ```
 
-Build, copy, run. The binary goes into `/tmp/hostscope/`, the same
-directory the checks below use, so the two never collide - copying it to
-`/tmp/hostscope` instead fails on any host where those checks have
-already run and left a directory of that name.
-
-The build cross-compiles from any machine with the
+Build, copy, run. The build cross-compiles from any machine with the
 `x86_64-unknown-linux-musl` target - no musl toolchain and no Docker,
 `.cargo/config.toml` links it with `rust-lld`. `ssh -t` matters: without
 a terminal on the other end the application has nothing to draw on.
-Without `sudo` it still runs, in the reduced form of D-13.
+Without `sudo` it still runs, in a reduced form: what it cannot read it
+marks unavailable rather than showing as a zero.
 
 ## What it shows
 
@@ -88,128 +84,48 @@ measured in cells.
 ## Building
 
 Rust 1.96, no dependencies beyond `ratatui`, `crossterm` and
-`unicode-width`, which `ratatui` already draws with. For the
-target host, a static build that needs nothing installed there:
+`unicode-width`, which `ratatui` already draws with. For the target
+host, a static build that needs nothing installed there:
 
 ```
 rustup target add x86_64-unknown-linux-musl
 cargo build --release --target x86_64-unknown-linux-musl
 ```
 
-The result is a 925 KB static binary. `cargo test` runs 87 tests: the
-model over captured `/proc` and `/sys/fs/cgroup` snapshots, the frame
-invariants over rendered text, the three environment shapes - Docker
-with the cgroupfs driver, a Kubernetes node, a plain systemd server -
-and the unit tests of the formatting, sampling and parsing code.
+The result is a 925 KB static binary.
 
-## The steps of a check
+## Options
 
-There are two, and they are named in the `Makefile` so the set is not
-assembled by hand every time:
+`hostscope --help` prints them all. Two of them matter before the first
+run: `--tick MS` sets the interval the application opens at, which `-`
+and `+` then move, and `--log FILE` writes what each tick and each frame
+cost. The rest drive it without a terminal - a captured snapshot instead
+of the live host, a key program instead of a person, the model or the
+frame printed instead of drawn - and those are what the tests and the
+checks use.
 
-```
-make fast    fmt, clippy and the tests, on the Mac    seconds
-make live    build, ship and check on the host        minutes
-```
-
-`make fast` is the step after every edit. `make live` is the step once
-per batch of work, because it needs a host and two minutes of it.
-`make live-quick` runs the sections that raise no load - the walk, the
-oracle, the linter, the sizes - in under a minute, and `make live-bg`
-runs the whole thing detached, so the wait is spent working rather than
-watching.
-
-## Verifying on a live host
-
-Everything the verification procedure describes is in `scripts/`, and
-`scripts/live-check.sh` puts it into one command: it cross builds,
-ships the binary and the checks in a single trip, runs them, brings the
-log back and prints the failures and what each section cost.
+## Checking it
 
 ```
-make live                          the whole run on the default host
-make live HOST=your.host           somewhere else
-make live SECTIONS='oracle security'   one section by name
-make live-bg && make live-log      detached, collected later
+make fast                   fmt, clippy and 87 tests, on your machine
+make live HOST=your.host    the whole check on a Linux host
 ```
 
-The whole run takes under two minutes, and every section prints what it
-cost, so a section that grows is visible in the log.
-
-Most of a run used to be `sleep`. A scenario was walked through `tmux`,
-and a capture taken before the application redrew returns the previous
-frame, so every keystroke was followed by 1.3 seconds - a tick plus a
-margin. The walks now run as key programs instead: `--keys` feeds one
-key per frame and `--dump-frame` prints what was drawn, so a walk costs
-its length in ticks and waits for nothing. `tmux` stays where a terminal
-is the thing being checked - the sizes, the resize on the fly, and a
-short pass that confirms a real terminal draws the frame the dump drew.
-The pauses after an induced load went the same way: a scope is in the
-tree and its counter is moving in under 20 ms, so the check waits for
-that fact rather than for four seconds.
-
-It walks the interface, compares the model against an
+`make fast` takes seconds and is the step after every edit. `make live`
+takes two minutes and needs a host: it ships the binary and the checks
+in one trip, walks the interface, compares the model against an
 independent oracle, lints every captured frame, raises induced states -
 a known CPU quota, a spike against a steady load, a disk load, 200 extra
 scopes, vanishing processes, long and non-ASCII names, no Docker socket,
 no root - checks that no process environment is ever opened and no
-external command is ever run, measures the non-functional figures, and
-cleans up after itself. Everything it creates is named with the `hs-`
-prefix.
-
-Last full run on the Kubernetes rig (2026-08-15): 37 checks passed, none
-failed, one skipped. It took 113 seconds, and the frame linter went over 133
-frames rather than the 29 the `tmux` walks used to produce - spelling a
-filter one key per frame yields a frame per letter, and each is checked
-against every invariant for free. A 50 percent quota showed as 0.489
-cores, the search found its node among 616, the worst collection on that
-full tree was 76 ms, the first frame arrived after 16.0 ms, and the
-application spent 2.7 percent of one core and 1.0 MB on itself. `strace`
-showed one `execve`, no file opened for writing and no
-`/proc/<pid>/environ` opened at all.
-
-The skipped one is the container with a 120 character name: that rig
-runs containerd under microk8s and has no Docker to raise that state
-with. What it gives instead is the degraded case of FR-3 for real - the
-containers are there, the socket is not, and the name falls back to the
-short identifier. The Docker side of FR-3 and the long container name
-need the Docker rig, where the previous full run passed 30 checks with
-none failed; `make live HOST=<that host>` runs them there.
-
-## Verification hooks
-
-The application can be driven without a terminal, which is what the
-tests and the checks above use:
-
-- `--cgroup-root DIR` and `--proc-root DIR` read a captured snapshot
-  instead of the live host.
-- `--docker-socket PATH|none` points at another socket or turns the
-  enrichment off.
-- `--dump-model json` prints the tree as numbers; two runs over one
-  snapshot print the same bytes.
-- `--dump-frame N` prints N frames as text, `--keys "Right a Escape"`
-  feeds one key per frame, `--size WxH` sets the terminal size.
-- `--tick MS` sets the interval the run opens at, which `-` and `+` then
-  move; `--log FILE` writes what each tick and each frame cost.
+external command is ever run, and cleans up after itself. Everything it
+creates on the host is named with the `hs-` prefix.
 
 ## Documents
 
-- Requirements: [docs/requirements.md](docs/requirements.md). Decisions
-  are in section 9, what was measured on the host is in sections 8, 8a,
-  8b and 6a, the state of the documents is in section 11.
-- How to verify: [docs/testing.md](docs/testing.md). The two rigs, the
-  feedback loop through `tmux`, the frame invariants and the induced
-  states.
-- The rules the screen must keep - one column set on every level, the
-  detail of a row on a line under the table, the mark on a node with
-  children, a tick of the bar for any non-zero value - are in section 11
-  of the requirements. They used to live in a screen mockup, which drew
-  the interface of before D-24 and was removed on 2026-08-21.
-
-Every decision of section 9 is settled. D-26 is the last: the `OWNER`
-column is always the name, with no switch. D-25 before it left one way
-down, one CPU unit, and no levels that hold a single row. D-24 before it made
-the tree the process forest and nothing else, with what runs a process a
-word on its row instead of a level above it. D-16 before it accepted the
-measured cost: 3.0 - 3.5 percent of one core on a host of about 370
-processes, which is the host the budget of section 6 now names.
+- Requirements: [docs/requirements.md](docs/requirements.md). What the
+  application must do, what was measured and where, and every settled
+  decision with the reason it was taken and what it rejected.
+- How to verify: [docs/testing.md](docs/testing.md). The rigs, the frame
+  invariants, the induced states, the figures of the last full run, and
+  which check covers which requirement.
