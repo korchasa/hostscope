@@ -229,15 +229,32 @@ sudo find /sys/fs/cgroup -maxdepth 4 -type f -name 'cgroup.procs' \
 A fixture is written twice with a known pause between them: a pair is
 needed to check the deltas (FR-15) and both measurement modes (FR-13).
 
-V2. **An oracle on the live host.** A separate Python script reads the
-same kernel files and computes the totals with its own code: it builds
-the process forest out of its own reading of `/proc/<pid>/stat` and sums
-each subtree itself. It must share no code with the application -
-otherwise it repeats the application's error. It is compared against
-`--dump-model json`. The tolerances come from the requirements: 1
-percent across the tree (FR-1), widened to what a live host actually
-swings by, and 5 percent for the core sum against `1 - idle` from
-`/proc/stat` (FR-1a).
+V2. **An oracle on the live host, and somebody else's reader beside
+it.** `scripts/oracle.py` reads the same kernel files and computes the
+totals with its own code: it builds the process forest out of its own
+reading of `/proc/<pid>/stat` and sums each subtree itself. It must share
+no code with the application - otherwise it repeats the application's
+error. It is compared against `--dump-model json`. The tolerances come
+from the requirements: 1 percent across the tree (FR-1), widened to what
+a live host actually swings by, and 5 percent for the core sum against
+`1 - idle` from `/proc/stat` (FR-1a).
+
+The oracle proves the arithmetic and cannot prove the convention: it
+reads the same files by the same understanding, so a wrong idea of what
+a kernel file means is an idea it shares. `scripts/pidstat-check.py`
+closes that. It reads nothing itself - `pidstat` of sysstat gives the CPU
+and the disk of every process, `ps` of procps gives the memory, and both
+have been reading these files for twenty years. What it compares is the
+value and not the shape: `pidstat` knows nothing about parents, so the
+subtree of a row is the one the model itself draws, and the tree stays
+the oracle's business. The wrong field of `/proc/<pid>/io`, kilobytes
+taken for bytes, a percentage of one core taken for a percentage of the
+machine - each shows up here and nowhere else. On a host without sysstat
+the section says so and skips; measured on the Kubernetes rig on
+2026-08-29, it compares 207 rows in ten seconds and skips four as churn.
+Removing the division by a hundred from its own reading of `%CPU` makes
+seventeen rows disagree by exactly that factor, which is how it is known
+to be able to fail.
 
 V3. **Scenarios through tmux.** A walk down the forest and back, the
 card on every level, sorting, search, filter, pause. What is checked is not only
@@ -439,8 +456,8 @@ sudo systemd-run --scope --slice=hs -p CPUQuota=50% --unit=hs-steady -q \
   screen clear does not arrive on every frame: for `htop` it did not
   arrive once in two seconds.
 
-**The last full run, on the Kubernetes rig, 2026-08-29.** 37 checks
-passed, none failed, one skipped, in 113 seconds. The frame linter went
+**The last full run, on the Kubernetes rig, 2026-08-29.** 38 checks
+passed, none failed, one skipped, in 123 seconds. The frame linter went
 over 133 frames rather than the 29 the `tmux` walks used to produce -
 spelling a filter one key per frame yields a frame per letter, and each
 one is checked against every invariant for free. It is the first run on
@@ -542,7 +559,7 @@ linter catches layout, not meaning.
 
 | Requirement | How it is checked |
 | --- | --- |
-| FR-1, FR-5 | V1 over the snapshot, V2 against the oracle, invariant 6 |
+| FR-1, FR-5 | V1 over the snapshot, V2 against the oracle and against `pidstat` and `ps`, invariant 6 |
 | FR-1a | Induced state with a known quota, oracle against `/proc/stat`, invariant 14 |
 | FR-2 | V3: a walk down the forest and back on `Enter` and `BSpace`, the card on every level with `i`, return to the same row |
 | FR-3 | Induced state `--docker-socket none`, a run without root |

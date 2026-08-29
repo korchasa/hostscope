@@ -74,7 +74,7 @@ ROOT=$(pwd)
 # --no-xattrs: without it the tar of macOS carries a provenance attribute that
 # the tar on the host does not know, and every ship prints a warning about it.
 tar --no-xattrs -cf - -C "$ROOT/target/$TARGET/release" hostscope \
-           -C "$ROOT/scripts" host-check.sh oracle.py frame-lint.py model-query.py \
+           -C "$ROOT/scripts" host-check.sh oracle.py pidstat-check.py frame-lint.py model-query.py \
   | ssh -o BatchMode=yes "$HOST" "mkdir -p $DIR && tar -xf - -C $DIR && chmod +x $DIR/hostscope" \
   || { echo "ship failed"; exit 1; }
 

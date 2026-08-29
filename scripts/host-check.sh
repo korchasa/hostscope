@@ -225,6 +225,25 @@ oracle() {
   fi
 }
 
+pidstat() {
+  part "4. the same figures read by sysstat and procps (V2)"
+  # The oracle proves the arithmetic; this proves the convention. It reads
+  # nothing itself: `pidstat` gives the CPU and the disk of every process and
+  # `ps` gives the memory, and both have been reading these files for twenty
+  # years. Where they are not installed the section says so rather than passing
+  # quietly - a check that skips itself in silence is a check nobody notices is
+  # gone.
+  if ! command -v pidstat >/dev/null 2>&1; then
+    skip "sysstat is not installed on this host, so pidstat cannot be compared"
+    return
+  fi
+  if sudo -n python3 "$DIR/pidstat-check.py" "$BIN" --window 10; then
+    pass "the figures agree with the ones sysstat and procps read"
+  else
+    fail "the figures disagree with sysstat or procps"
+  fi
+}
+
 scenario() {
   part "5. a walk down the forest and back (FR-2)"
   # Enter goes down, Backspace comes back, i opens the card of any row (D-25).
@@ -856,7 +875,7 @@ cleanup() {
 
 # The order follows the section numbers the parts print, so a log reads in
 # the order of the verification document.
-ALL="prepare baseline oracle scenario keys linter security induced_load induced_disk induced_many induced_vanishing induced_names degraded sizes measurements cleanup"
+ALL="prepare baseline oracle pidstat scenario keys linter security induced_load induced_disk induced_many induced_vanishing induced_names degraded sizes measurements cleanup"
 # Each section is timed: the run costs minutes, and the only way to know which
 # minute is worth paying for is to see where it goes.
 for section in ${*:-$ALL}; do
