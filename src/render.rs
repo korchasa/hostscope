@@ -1281,6 +1281,16 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
                 &mut lines,
             );
         }
+        // Always, zero included: the reader opened the card to find out whether
+        // this process is in swap, and a row that disappears at zero reads as a
+        // figure that could not be read.
+        fig(
+            "own swap",
+            or_na(app.card_extras.as_ref().and_then(|e| e.swap), mem_str),
+            String::new(),
+            "pages moved out of RAM to the swap device",
+            &mut lines,
+        );
     }
     fig(
         "disk r/w",

@@ -501,6 +501,52 @@ fn every_memory_row_says_what_its_number_counts() {
     }
 }
 
+/// What a process has been swapped out of RAM is the one memory figure the
+/// card could not show, and it is the one that explains a host that reads from
+/// disk while its memory looks free. `/proc/<pid>/status` carries it as
+/// `VmSwap` and needs no root, unlike the PSS beside it.
+#[test]
+fn the_card_says_how_much_of_a_process_sits_in_swap() {
+    let f = Fixture::new("card-swap");
+    build(&f);
+    f.process_extras(101, 20, 2, 4400);
+    f.process_swap(101, 2048);
+    let card = scenario(&f, "v / s s h d Enter i", "100x40")
+        .last()
+        .unwrap()
+        .clone();
+    let text = card.join("\n");
+    let line = card
+        .iter()
+        .find(|l| l.starts_with("\u{2502}  own swap "))
+        .unwrap_or_else(|| panic!("no swap row in:\n{text}"));
+    assert!(
+        line.contains("2.0M"),
+        "the swap row lost its figure: {line:?}"
+    );
+
+    // Nothing swapped out is an answer, not a reason to leave the row out: the
+    // reader opened the card to find out, and a missing row reads as a figure
+    // that could not be read.
+    let card = scenario(&f, "v / r e d i s Enter i", "100x40")
+        .last()
+        .unwrap()
+        .clone();
+    let line = card
+        .iter()
+        .find(|l| l.starts_with("\u{2502}  own swap "))
+        .unwrap_or_else(|| {
+            panic!(
+                "no swap row for an unswapped process in:\n{}",
+                card.join("\n")
+            )
+        });
+    assert!(
+        line.contains("n/a"),
+        "a process whose status was never read should say so: {line:?}"
+    );
+}
+
 /// The explanations on the card are text like any other, and a narrow terminal
 /// used to cut them mid-word against the border - the reader saw "shared pages
 /// divid" and had nothing to do with it. They wrap now (D-33).

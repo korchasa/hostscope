@@ -83,6 +83,16 @@ impl Fixture {
              Max open files            524287               524288               files\n",
         );
         write_file(&dir.join("smaps_rollup"), &format!("Pss:  {pss_kb} kB\n"));
+        write_file(&dir.join("status"), "VmSwap:\t       0 kB\n");
+    }
+
+    /// How much of the process the kernel has moved out of RAM. Written after
+    /// `process_extras`, which puts a zero there: a card shows the row either
+    /// way, and the two cases read differently.
+    pub fn process_swap(&self, pid: i32, kb: u64) {
+        let dir = self.proc_root().join(pid.to_string());
+        fs::create_dir_all(&dir).unwrap();
+        write_file(&dir.join("status"), &format!("VmSwap:\t{kb} kB\n"));
     }
 
     /// One process, in the shape `/proc/<pid>/stat` has on a live host.

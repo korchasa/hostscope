@@ -43,6 +43,11 @@ pub struct ProcExtras {
     /// carried both made the reader look for a word inside it (D-32).
     pub limits: Vec<(&'static str, String)>,
     pub pss: Option<f64>,
+    /// What the kernel has moved out of RAM for this process. It comes from
+    /// `/proc/<pid>/status`, which any user may read - unlike `smaps_rollup`
+    /// beside it, so a run without root still answers the question the card
+    /// was opened for.
+    pub swap: Option<f64>,
     pub restricted: Vec<&'static str>,
 }
 
@@ -208,6 +213,25 @@ pub fn extras(proc_root: &Path, pid: i32) -> ProcExtras {
                 e.limits.push(("nproc", v));
             }
         }
+    }
+
+    match fs::read_to_string(dir.join("status")) {
+        Ok(text) => {
+            for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("VmSwap:") {
+                    if let Some(kb) = rest
+                        .split_whitespace()
+                        .next()
+                        .and_then(|v| v.parse::<f64>().ok())
+                    {
+                        e.swap = Some(kb * 1024.0);
+                    }
+                }
+            }
+        }
+        // A kernel thread has no address space and no `VmSwap` line at all, so
+        // an absent value is left absent rather than turned into a zero (D-13).
+        Err(_) => e.restricted.push("swap"),
     }
 
     match fs::read_to_string(dir.join("smaps_rollup")) {

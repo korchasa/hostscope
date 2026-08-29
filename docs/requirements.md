@@ -1394,6 +1394,27 @@ of the card.
   It moves under the figures, aligned with the value column, when the
   room beside them is too small for it.
 
+D-34. The card says how much of a process sits in swap. DECIDED
+2026-08-29 by the operator, after the memory rows were given their
+explanations.
+
+- A host that reads from disk while its memory looks free is a host
+  swapping, and the card had no figure for it. `VmSwap` in
+  `/proc/<pid>/status` is that figure, and it costs one file read when a
+  card opens - the card is drawn for the selected row alone, so this
+  never reaches the tick budget of section 6.
+- `status` is readable by any user, unlike the `smaps_rollup` the PSS
+  comes from. Measured on the Kubernetes rig on 2026-08-29: without root
+  `smaps_rollup` answered `Permission denied` while `VmSwap` was there
+  for a process of another owner. The row therefore answers in a reduced
+  run where the row above it cannot (D-13).
+- The row is drawn at zero as well. Nothing in swap is the answer the
+  reader opened the card for, and a row that disappears at zero reads as
+  a figure that could not be read.
+- Only the process rows. A container or a service has
+  `memory.swap.current` in its cgroup, which is a second source and a
+  second read; it is left for the host that needs it.
+
 ## 10. Definition of done
 
 The work is finished when:
@@ -1496,12 +1517,15 @@ worth carrying next to the requirements:
   instant and average is the diagnosis: a spike shows as a divergence, a
   steady load as a match. Every figure has a label of its own on the left
   edge, and no line holds a second labelled value (D-32).
+- The card of a process carries `own swap` - what the kernel has moved
+  out of RAM for it - and carries it at zero as well (D-34).
 - Every memory row on the card says what its number counts. RSS, virtual
   and PSS stand under one another and measure three different things, so
   a reader who takes them for one number reads the card wrong: RSS counts
   a shared page in full for every process that maps it, virtual is
   address space rather than memory held, and PSS divides a shared page
-  among those that map it (D-32).
+  among those that map it. The swap row under them says the pages are
+  out of RAM altogether (D-32).
 - On the card a value too wide for the room wraps under its own label,
   and the cgroup path wraps with the rest: a path with its tail cut off
   names no unit `systemctl` would answer about (D-33).

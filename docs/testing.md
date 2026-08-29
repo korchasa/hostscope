@@ -556,6 +556,7 @@ linter catches layout, not meaning.
 | Section 11 | `tests/documents.rs`: what `--help` prints stands in `README.md` word for word, so the description of the screen has one source and `make readme` is what moves it |
 | D-32 | V1 over a snapshot with the files, limits and PSS of a process: the card heads its two figure columns once, starts every `now` and every `avg` at the same cell, and gives `own virtual`, `own PSS`, `sockets`, `nofile` and `nproc` a label each |
 | D-33 | V1 over a snapshot with a command line longer than the terminal: `pid`, `parent`, `user`, `threads` and `started` each have a label, the command wraps under its own label with nothing lost, and invariant 1 holds on every wrapped line. At 70 and 60 cells the explanations beside the figures and the cgroup path are whole once the wrapped lines are joined, and a pid the room cannot hold is marked as cut rather than broken |
+| D-34 | V1 over a snapshot: the card of a process whose `VmSwap` says 2048 kB shows `own swap  2.0M`, and the card of a process with no `status` file shows the row with `n/a` rather than leaving it out |
 | Section 6 | Section 9 of this document |
 
 ## 14. Link to the requirements
