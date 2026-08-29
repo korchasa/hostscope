@@ -1364,6 +1364,36 @@ on a card and having to read every line to find it.
   hid when it does not fit (D-25), so a short terminal loses the tail
   rather than losing it in silence.
 
+D-33. Nothing on the card is cut off the edge, and nothing shares a
+label. DECIDED 2026-08-29 by the operator, continuing D-32 into the rest
+of the card.
+
+- The rows above the figures packed several facts each: `process` held
+  the name, the pid and the parent, and `user` held the user, the thread
+  count and the start time. They are identity rather than measurement, so
+  they are read once rather than compared - but a card read two ways is
+  still read two ways, and the reader who wants the pid should find it
+  where every other label is, on the left edge.
+- A value too wide for the card was cut with an ellipsis, which loses the
+  end of a command line - the part that says which configuration file a
+  process was started with. Values wrap instead, onto as many lines as
+  they need, with the label written once and the continuation lines
+  under it. The card already says how many lines it hid when it does not
+  fit (D-25), so what wrapping costs is visible rather than silent.
+- The command line is the exception, and it is capped at three lines with
+  the cut marked. A command of five hundred characters is six lines on a
+  narrow terminal, and the card exists for the figures below it: letting
+  one value push them off the screen answers a question nobody asked at
+  the price of the one they did.
+- A pid is never wrapped. Four digits of a pid name a different process,
+  so where the room cannot hold one whole the value goes on a single line
+  and the cut is marked, the way it was before wrapping existed.
+- The explanations wrap too. The note beside a figure - what PSS counts,
+  why the network is attributed to a namespace - stood to the right of
+  the two columns and was cut against the border on a narrow terminal.
+  It moves under the figures, aligned with the value column, when the
+  room beside them is too small for it.
+
 ## 10. Definition of done
 
 The work is finished when:
@@ -1457,11 +1487,18 @@ worth carrying next to the requirements:
 - A name longer than its column is truncated with an ellipsis, the path
   line is truncated from the left. Columns never merge, whatever the
   name.
+- On the card a value too wide for the room wraps onto the next line
+  under the same label, rather than being cut. The command line wraps at
+  most three times and marks the cut, so that one value cannot push the
+  figures off the screen (D-33).
 - The card of any row carries CPU, memory, disk and network in both
   modes at once, in two fixed columns under one heading. The gap between
   instant and average is the diagnosis: a spike shows as a divergence, a
   steady load as a match. Every figure has a label of its own on the left
   edge, and no line holds a second labelled value (D-32).
+- On the card a value too wide for the room wraps under its own label,
+  and the cgroup path wraps with the rest: a path with its tail cut off
+  names no unit `systemctl` would answer about (D-33).
 - The card prints only what this node actually has. The host row has no
   command line and no container, and filling the screen with empty
   labels is not allowed.

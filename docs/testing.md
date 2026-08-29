@@ -432,14 +432,14 @@ sudo systemd-run --scope --slice=hs -p CPUQuota=50% --unit=hs-steady -q \
   arrive once in two seconds.
 
 **The last full run, on the Kubernetes rig, 2026-08-29.** 37 checks
-passed, none failed, one skipped, in 112 seconds. The frame linter went
+passed, none failed, one skipped, in 113 seconds. The frame linter went
 over 133 frames rather than the 29 the `tmux` walks used to produce -
 spelling a filter one key per frame yields a frame per letter, and each
 one is checked against every invariant for free. A 50 percent quota
-showed as 0.495 cores, the search found its node among 615, collection
-took 41.8 ms at the 95th percentile and a redraw 1.0 ms, the first frame
-arrived after 15.9 ms, the application sent 478 bytes per frame with no
-full screen clear in 20 seconds, and it spent 3.00 percent of one core
+showed as 0.496 cores, the search found its node among 616, collection
+took 43.2 ms at the 95th percentile and a redraw 1.0 ms, the first frame
+arrived after 16.2 ms, the application sent 478 bytes per frame with no
+full screen clear in 20 seconds, and it spent 3.31 percent of one core
 and 1.2 MB on itself. `strace` showed one `execve`, no file opened for
 writing and no `/proc/<pid>/environ` opened at all.
 
@@ -486,7 +486,7 @@ services have users. The rules are mandatory on either.
   run reads as a thorough one. Later the same day the walks moved off
   `tmux` and the waits for a load became waits for its counter, which
   took the run from three minutes to under two, and the sections added
-  since fit inside what was freed: 37 checks now run in 112 seconds
+  since fit inside what was freed: 37 checks now run in 113 seconds
   against the 29 that took 172. Of what is left, the
   averaging window of FR-13, the oracle's ten seconds and the twenty of
   the measurements are not overhead: they are the measurements.
@@ -555,6 +555,7 @@ linter catches layout, not meaning.
 | D-31 | V1 over a snapshot laid out as a Kubernetes node: a shim with the pod sandbox and the workload container under it names the pod, a shim whose two children sit in different pods names nothing, and the parser reads the pod out of both cgroup driver layouts |
 | Section 11 | `tests/documents.rs`: what `--help` prints stands in `README.md` word for word, so the description of the screen has one source and `make readme` is what moves it |
 | D-32 | V1 over a snapshot with the files, limits and PSS of a process: the card heads its two figure columns once, starts every `now` and every `avg` at the same cell, and gives `own virtual`, `own PSS`, `sockets`, `nofile` and `nproc` a label each |
+| D-33 | V1 over a snapshot with a command line longer than the terminal: `pid`, `parent`, `user`, `threads` and `started` each have a label, the command wraps under its own label with nothing lost, and invariant 1 holds on every wrapped line. At 70 and 60 cells the explanations beside the figures and the cgroup path are whole once the wrapped lines are joined, and a pid the room cannot hold is marked as cut rather than broken |
 | Section 6 | Section 9 of this document |
 
 ## 14. Link to the requirements

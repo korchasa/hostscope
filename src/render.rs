@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use crate::app::{App, Row, View};
 use crate::model::{Kind, Metrics, Mode, Node, OwnerKind, Sort};
 use crate::util::{
-    bar, bytes_str, cores_opt, dur_str, fit, fit_left, mem_str, or_na, pad, pad_left,
+    bar, bytes_str, char_width, cores_opt, dur_str, fit, fit_left, mem_str, or_na, pad, pad_left,
     pair_rate_opt, sparkline, str_width, uptime_str,
 };
 
@@ -745,7 +745,6 @@ fn owner_hint(sel: &Node, docker_available: bool) -> String {
 /// daemon gave; a service and a user get their name, which is all there is.
 fn owner_lines(
     node: &Node,
-    u: usize,
     kv: &dyn Fn(&str, String, &mut Vec<Line<'static>>),
     note: &dyn Fn(String, &mut Vec<Line<'static>>),
     lines: &mut Vec<Line<'static>>,
@@ -796,11 +795,7 @@ fn owner_lines(
                             .take(4)
                             .map(|(k, v)| format!("{k}={v}"))
                             .collect();
-                        kv(
-                            "labels",
-                            fit(&labels.join("  "), u.saturating_sub(20)),
-                            lines,
-                        );
+                        kv("labels", labels.join("  "), lines);
                     }
                 }
                 None => kv(
@@ -823,7 +818,9 @@ fn owner_lines(
         OwnerKind::System => {}
     }
     if let Some(path) = &node.detail.cgroup_path {
-        kv("cgroup", fit(path, u.saturating_sub(20)), lines);
+        // Whole, across as many lines as it takes: a path with its tail cut
+        // off names no unit `systemctl` would answer about (D-33).
+        kv("cgroup", path.clone(), lines);
     }
 }
 
@@ -836,6 +833,54 @@ fn owner_lines(
 /// terminal of twenty-six columns or narrower, where the table has already
 /// dropped three of its columns, and there is nothing to be done about it short
 /// of not drawing the card at all.
+/// A value laid out under its label: as many lines as it needs, broken between
+/// words (D-33). Before this a value wider than the card was cut with an
+/// ellipsis, which takes the end off a command line - and the end is the part
+/// that says which configuration file a process was started with.
+///
+/// The spacing inside a line is kept as it was given. Several spaces are how
+/// this card separates a pid from the command it belongs to, and a wrapper that
+/// squeezes them to one merges two columns into one word.
+///
+/// A word wider than the room is broken where the room ends. A path and an
+/// identifier carry no spaces, so a wrapper that only breaks between words
+/// would leave them cut after all.
+fn wrap(text: &str, room: usize) -> Vec<String> {
+    let room = room.max(1);
+    let mut out: Vec<String> = Vec::new();
+    let mut line = String::new();
+    let mut width = 0usize;
+    // Where the word being written started, so a break puts the whole of it on
+    // the next line rather than in two halves.
+    let mut word_at: Option<usize> = None;
+    let mut prev_space = true;
+    for c in text.chars() {
+        let cw = char_width(c);
+        if width + cw > room {
+            match word_at {
+                Some(at) if at > 0 => {
+                    let rest = line.split_off(at);
+                    out.push(line.trim_end().to_string());
+                    line = rest;
+                }
+                _ => out.push(std::mem::take(&mut line)),
+            }
+            width = str_width(&line);
+            word_at = if line.is_empty() { None } else { Some(0) };
+        }
+        if c != ' ' && prev_space {
+            word_at = Some(line.len());
+        }
+        line.push(c);
+        width += cw;
+        prev_space = c == ' ';
+    }
+    if !line.trim().is_empty() {
+        out.push(line.trim_end().to_string());
+    }
+    out
+}
+
 fn chain_lines(glued: &[(i32, String)], room: usize) -> Vec<String> {
     let arrow = "  \u{2192}  ";
     let mut out: Vec<String> = Vec::new();
@@ -975,60 +1020,98 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
     let mut lines: Vec<Line<'static>> = Vec::new();
     let window = dur_str(app.view().window);
 
+    // The label is written once and the value continues under it: a card that
+    // cut the tail off a value lost the end of a command line (D-33).
     let kv = |k: &str, v: String, lines: &mut Vec<Line<'static>>| {
-        lines.push(clip(
-            vec![
-                Span::styled(format!("  {}", pad(k, 16)), dim()),
-                Span::styled(v, plain()),
-            ],
-            u,
-        ));
+        let parts = wrap(&v, u.saturating_sub(20));
+        let parts = if parts.is_empty() {
+            vec![String::new()]
+        } else {
+            parts
+        };
+        for (i, part) in parts.into_iter().enumerate() {
+            lines.push(clip(
+                vec![
+                    Span::styled(format!("  {}", pad(if i == 0 { k } else { "" }, 16)), dim()),
+                    Span::styled(part, plain()),
+                ],
+                u,
+            ));
+        }
     };
+    // An explanation is text, and on a narrow terminal it wraps like any other
+    // text on this card: cut against the border it read as "shared pages
+    // divid", and the reader had nothing to do with that (D-33).
     let note = |t: String, lines: &mut Vec<Line<'static>>| {
-        lines.push(clip(vec![Span::styled(format!("  {t}"), dim())], u));
+        for part in wrap(&t, u.saturating_sub(4)) {
+            lines.push(clip(vec![Span::styled(format!("  {part}"), dim())], u));
+        }
     };
     // A figure stands in a column of its own, and the column is the same on
     // every row: the reader runs the eye down it instead of searching each
     // line for the word `avg` (D-32). A value wider than its column pushes the
     // next one rather than being cut - a figure is never shortened in silence.
     let fig = |k: &str, now: String, avg: String, tail: &str, lines: &mut Vec<Line<'static>>| {
+        // The three columns take fifty cells; what the terminal leaves after
+        // them is what the explanation beside the figures has to live in.
+        let room = u.saturating_sub(52);
+        let inline = !tail.is_empty() && str_width(tail) <= room;
         lines.push(clip(
             vec![
                 Span::styled(format!("  {}", pad(k, 16)), dim()),
                 Span::styled(pad(&now, 16), plain()),
                 Span::styled(pad(&avg, 16), plain()),
-                Span::styled(tail.to_string(), dim()),
+                Span::styled(
+                    if inline {
+                        tail.to_string()
+                    } else {
+                        String::new()
+                    },
+                    dim(),
+                ),
             ],
             u,
         ));
+        // Too narrow for the explanation to stand beside the figures: it goes
+        // under them, aligned with the value column, and wraps there (D-33).
+        if !tail.is_empty() && !inline {
+            for part in wrap(tail, u.saturating_sub(20)) {
+                lines.push(clip(
+                    vec![
+                        Span::styled(" ".repeat(18), dim()),
+                        Span::styled(part, dim()),
+                    ],
+                    u,
+                ));
+            }
+        }
     };
 
     match node.kind {
         Kind::Process => {
+            // Identity is read by label like everything else on the card: the
+            // reader after a pid finds it on the left edge rather than inside
+            // the value of another label (D-33).
+            kv("process", node.name.clone(), &mut lines);
+            kv("pid", node.detail.pid.unwrap_or(0).to_string(), &mut lines);
             kv(
-                "process",
-                format!(
-                    "{}   pid {}   parent {}",
-                    node.name,
-                    node.detail.pid.unwrap_or(0),
-                    node.detail.ppid.unwrap_or(0)
-                ),
+                "parent",
+                node.detail.ppid.unwrap_or(0).to_string(),
                 &mut lines,
             );
             kv(
                 "user",
-                format!(
-                    "{}   threads {}{}",
-                    node.detail.user.clone().unwrap_or_else(|| "n/a".into()),
-                    node.detail.threads.unwrap_or(0),
-                    node.detail
-                        .started
-                        .as_ref()
-                        .map(|s| format!("   started {s}"))
-                        .unwrap_or_default()
-                ),
+                node.detail.user.clone().unwrap_or_else(|| "n/a".into()),
                 &mut lines,
             );
+            kv(
+                "threads",
+                node.detail.threads.unwrap_or(0).to_string(),
+                &mut lines,
+            );
+            if let Some(started) = &node.detail.started {
+                kv("started", started.clone(), &mut lines);
+            }
             if !node.detail.glued.is_empty() {
                 // The row is one process wide in its figures and several
                 // processes wide in its name, so the card names every link of
@@ -1049,34 +1132,46 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
                 }
             }
             if let Some(cmd) = &node.detail.cmdline {
-                // The pid goes into the value, not into the label. The label
-                // column is sixteen cells and `pad` cuts to it, so a pid put
-                // there loses a digit past five of them and names a different
-                // process on a host with the ordinary `pid_max` of 4194304 -
-                // the very confusion the chain list is drawn to prevent.
-                //
-                // The whole value goes through `fit` once more at the end. A
-                // fixed reserve for the pid is only a reserve while the terminal
-                // is wide enough to hold it: on a narrow one the pid alone runs
-                // past the room the label leaves, and `clip` cuts what overflows
-                // with `pad`, which leaves no mark. That put `4194` on the card
-                // of pid 4194303 - a shorter pid that exists on the same host.
-                // `fit` marks its cut, so a pid that will not fit reads as cut.
+                // The command wraps like any other value, but only three times.
+                // A command of five hundred characters is six lines on a narrow
+                // terminal, and the card is cut from its tail: one value would
+                // push the figures off the screen (D-33). The cut is marked,
+                // like every other cut on the screen (section 11).
                 let room = u.saturating_sub(20);
-                match node.detail.glued.last() {
-                    Some((pid, _)) => {
-                        let head = format!("{pid}   ");
-                        let tail = fit(cmd, room.saturating_sub(str_width(&head)));
-                        kv(
-                            "command of",
-                            fit(&format!("{head}{tail}"), room),
-                            &mut lines,
-                        )
+                let text = match node.detail.glued.last() {
+                    // The pid goes into the value, not into the label: the label
+                    // column is sixteen cells, and a pid put there loses a digit
+                    // past five of them and names a different process on a host
+                    // with the ordinary `pid_max` of 4194304.
+                    Some((pid, _)) => format!("{pid}   {cmd}"),
+                    None => cmd.clone(),
+                };
+                let label = if node.detail.glued.is_empty() {
+                    "command"
+                } else {
+                    "command of"
+                };
+                let mut parts = wrap(&text, room);
+                // A pid is never shown in halves: four digits of it name a
+                // different process (D-25). Where the room cannot hold the pid
+                // whole, the value goes on one line and the cut is marked, the
+                // way it was before this card wrapped anything.
+                if let Some((pid, _)) = node.detail.glued.last() {
+                    let head = pid.to_string();
+                    if !parts.first().is_some_and(|p| p.starts_with(&head)) {
+                        parts = vec![fit(&text, room)];
                     }
-                    None => kv("command", fit(cmd, room), &mut lines),
+                }
+                if parts.len() > 3 {
+                    parts.truncate(3);
+                    let last = parts.pop().unwrap_or_default();
+                    parts.push(fit(&format!("{last} "), room).trim_end().to_string());
+                }
+                for (i, part) in parts.into_iter().enumerate() {
+                    kv(if i == 0 { label } else { "" }, part, &mut lines);
                 }
             }
-            owner_lines(&node, u, &kv, &note, &mut lines);
+            owner_lines(&node, &kv, &note, &mut lines);
         }
         Kind::Host => {
             kv(
@@ -1471,5 +1566,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The spacing inside a value is part of what it says: three spaces are how
+    /// the card separates a pid from the command it belongs to. A wrapper that
+    /// squeezes a run of spaces to one glues the two into a single word.
+    #[test]
+    fn wrapping_keeps_the_spacing_it_was_given() {
+        assert_eq!(
+            wrap("999999   node server.js", 50),
+            vec!["999999   node server.js"]
+        );
+        assert_eq!(
+            wrap("999999   node server.js", 12),
+            vec!["999999", "node", "server.js"]
+        );
+        // A word with no space in it is broken where the room ends: a path
+        // would otherwise be cut after all.
+        assert_eq!(wrap("/very/long/path", 5), vec!["/very", "/long", "/path"]);
     }
 }

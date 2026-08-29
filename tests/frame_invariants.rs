@@ -425,6 +425,101 @@ fn the_card_puts_every_figure_under_a_label_and_a_column() {
     );
 }
 
+/// D-33: every fact of the card has a label on the left edge, and a value too
+/// wide for the room wraps under that label instead of losing its end. A
+/// command line is where the end matters: it is the part that says which
+/// configuration file the process was started with.
+#[test]
+fn the_card_labels_every_fact_and_wraps_what_does_not_fit() {
+    let f = Fixture::new("card-wrap");
+    build(&f);
+    let long = "/usr/sbin/sshd -D -f /etc/ssh/sshd_config.d/50-cloud-init.conf \
+-o LogLevel=VERBOSE -o PermitRootLogin=no -o PasswordAuthentication=no";
+    f.process(101, 1, "sshd", 100, 1000, long);
+    f.process_extras(101, 20, 2, 4400);
+
+    let frames = scenario(&f, "v / s s h d Enter i", "100x40");
+    check_all(&frames, 100);
+    let card = frames.last().unwrap().clone();
+    let text = card.join("\n");
+
+    // Identity is read by label, like everything else on the card.
+    for label in ["process", "pid", "parent", "user", "threads", "started"] {
+        assert!(
+            card.iter()
+                .any(|l| l.starts_with(&format!("\u{2502}  {label} "))),
+            "no line labelled {label} in:\n{text}"
+        );
+    }
+
+    // The command is all there, across as many lines as it takes.
+    let drawn: String = card
+        .iter()
+        .skip_while(|l| !l.starts_with("\u{2502}  command "))
+        .take_while(|l| !l.trim_end_matches([' ', '\u{2502}']).is_empty())
+        .map(|l| l.trim_start_matches('\u{2502}').trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    for part in ["50-cloud-init.conf", "PasswordAuthentication=no"] {
+        assert!(drawn.contains(part), "the command lost {part}: {drawn:?}");
+    }
+    assert!(
+        !drawn.contains('\u{2026}'),
+        "the command was cut although it fits in three lines: {drawn:?}"
+    );
+}
+
+/// The explanations on the card are text like any other, and a narrow terminal
+/// used to cut them mid-word against the border - the reader saw "shared pages
+/// divid" and had nothing to do with it. They wrap now (D-33).
+#[test]
+fn the_card_wraps_its_explanations_instead_of_cutting_them() {
+    let f = Fixture::new("card-notes");
+    build(&f);
+    f.process(101, 1, "sshd", 100, 1000, "/usr/sbin/sshd -D");
+    f.process_extras(101, 20, 2, 4400);
+
+    for cells in [70usize, 60] {
+        let size = format!("{cells}x40");
+        let frames = scenario(&f, "v / s s h d Enter i", &size);
+        let card = frames.last().unwrap().clone();
+        // Wrapped text reads as one sentence again once the lines are joined.
+        let flat = card
+            .iter()
+            .map(|l| l.trim_matches(|c| c == '\u{2502}' || c == ' '))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+        for phrase in [
+            "shared pages divided between those that map them",
+            "attributed to the namespace, not to the process",
+        ] {
+            assert!(
+                flat.contains(phrase),
+                "{size}: the explanation was cut: {phrase:?} is missing from:\n{}",
+                card.join("\n")
+            );
+        }
+    }
+
+    // The cgroup path is how the reader finds the unit in `systemctl`, and a
+    // path with its tail cut off names nothing. It wraps too (D-33).
+    let card = scenario(&f, "v / h s - Enter i", "60x40")
+        .last()
+        .unwrap()
+        .clone();
+    let flat = card
+        .iter()
+        .map(|l| l.trim_matches(|c| c == '\u{2502}' || c == ' '))
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(
+        flat.contains("/user.slice/user-1000.slice/session-15324.scope"),
+        "the cgroup path was cut at 60 cells:\n{}",
+        card.join("\n")
+    );
+}
+
 #[test]
 fn the_list_view_holds_the_invariants_and_reaches_a_process_from_the_root() {
     let f = Fixture::new("list");
