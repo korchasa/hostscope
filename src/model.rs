@@ -106,6 +106,7 @@ impl Metrics {
     pub fn sub(&mut self, o: &Metrics) {
         self.cpu = opt_sub(self.cpu, o.cpu);
         self.mem = opt_sub(self.mem, o.mem);
+        self.swap = opt_sub(self.swap, o.swap);
         self.tasks = opt_sub(self.tasks, o.tasks);
         self.rd = opt_sub(self.rd, o.rd);
         self.wr = opt_sub(self.wr, o.wr);
@@ -122,6 +123,7 @@ impl Metrics {
         for v in [
             &mut self.cpu,
             &mut self.mem,
+            &mut self.swap,
             &mut self.tasks,
             &mut self.rd,
             &mut self.wr,
@@ -139,7 +141,7 @@ impl Metrics {
 
     pub fn any_nonzero(&self) -> bool {
         [
-            self.cpu, self.mem, self.tasks, self.rd, self.wr, self.rx, self.tx,
+            self.cpu, self.mem, self.swap, self.tasks, self.rd, self.wr, self.rx, self.tx,
         ]
         .iter()
         .any(|v| v.unwrap_or(0.0) != 0.0)
@@ -468,6 +470,27 @@ mod tests {
         let s = self_row(&parent).unwrap();
         assert!((s.instant.cpu.unwrap() - 0.4).abs() < 1e-9);
         assert!((s.instant.mem.unwrap() - 50.0).abs() < 1e-9);
+    }
+
+    /// Swap is subtracted like every other value. Seen on a third host on
+    /// 2026-08-29: the host row said 8.0G of swap and the branch under it
+    /// summed to 8.2G, and the `(self)` row repeated the 8.0G instead of the
+    /// remainder - it was left out of the subtraction.
+    #[test]
+    fn self_row_takes_the_swap_of_its_children_off_too() {
+        let mut parent = node("p", 1.0, 100.0);
+        parent.instant.swap = Some(8000.0);
+        parent.avg.swap = Some(8000.0);
+        let mut child = node("a", 0.4, 30.0);
+        child.instant.swap = Some(8200.0);
+        child.avg.swap = Some(8200.0);
+        parent.children.push(child);
+        let s = self_row(&parent).unwrap();
+        assert!(
+            (s.instant.swap.unwrap() + 200.0).abs() < 1e-9,
+            "the swap remainder is {:?}",
+            s.instant.swap
+        );
     }
 
     #[test]
