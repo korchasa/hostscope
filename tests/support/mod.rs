@@ -177,6 +177,49 @@ impl Fixture {
         self.process(402, 1, "systemd", 20, 300, "/lib/systemd/systemd --user");
     }
 
+    /// The boundary D-30 is about: a runtime shim of `containerd.service` with
+    /// its whole work inside a container, which is where the process forest
+    /// stops gluing because the owner changes. `system.slice` also holds a shim
+    /// with two containers under it, which is the case the parentheses must
+    /// stay away from - one row cannot name two.
+    pub fn shape_shim_boundary(&self) {
+        self.host(1_000_000, 900_000, 4);
+        self.cgroup("", &[]);
+        self.cgroup("init.scope", &[1]);
+        self.cgroup("system.slice", &[]);
+        self.cgroup("system.slice/containerd.service", &[101, 102]);
+        self.cgroup("system.slice/docker-5b21e4f70a9c36d81e40b7a2c95df0361847e2b9d05c7a61f3e802b4d97c16a8.scope", &[201]);
+        self.cgroup("system.slice/docker-7d09b3a62e15c48f0b7d29e63a840c157f2b96d4e01a83c7b52d4f096e18a3b7.scope", &[301]);
+        self.cgroup("system.slice/docker-9f42c807b1d63e59a20c48f7d3b915e64087a2c9f5b31d80e647c2a91b05d3f8.scope", &[302]);
+        self.process(1, 0, "systemd", 20, 100, "/sbin/init");
+        self.process(
+            101,
+            1,
+            "containerd-shim",
+            12,
+            300,
+            "containerd-shim-runc-v2",
+        );
+        self.process(
+            102,
+            1,
+            "containerd-shim",
+            12,
+            300,
+            "containerd-shim-runc-v2",
+        );
+        self.process(
+            201,
+            101,
+            "s6-svscan",
+            60,
+            1500,
+            "/bin/s6-svscan /run/service",
+        );
+        self.process(301, 102, "nginx", 40, 900, "nginx: master process");
+        self.process(302, 102, "redis-server", 40, 800, "redis-server *:6379");
+    }
+
     pub fn host(&self, cpu_total: u64, cpu_idle: u64, cores: usize) {
         let dir = self.proc_root();
         fs::create_dir_all(dir.join("sys/kernel")).unwrap();

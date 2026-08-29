@@ -623,7 +623,14 @@ fn bar_style(sort: Sort, m: &Metrics, frac: f64) -> Style {
 fn row_name(row: &Row, cols: &Cols) -> (String, String) {
     let mark = if row.children > 0 { "> " } else { "  " };
     let room = cols.name.saturating_sub(2);
-    let name_width = str_width(&row.node.name);
+    // What the row leads into is drawn as part of its name, so it is truncated
+    // with the name, the filter marks it like any other match, and the width
+    // arithmetic below counts it (D-30).
+    let name = match &row.node.detail.leads_into {
+        Some(container) => format!("{} ({})", row.node.name, container),
+        None => row.node.name.clone(),
+    };
+    let name_width = str_width(&name);
     let path = if row.prefix.is_empty() {
         String::new()
     } else if name_width + str_width(&row.prefix) <= room {
@@ -636,10 +643,7 @@ fn row_name(row: &Row, cols: &Cols) -> (String, String) {
         fit_left(&row.prefix, room.saturating_sub(name_width).clamp(2, room))
     };
     let used = 2 + str_width(&path);
-    (
-        format!(" {mark}{path}"),
-        fit(&row.node.name, cols.name - used),
-    )
+    (format!(" {mark}{path}"), fit(&name, cols.name - used))
 }
 
 /// The `OWNER` cell with the space that separates it from the name. The column

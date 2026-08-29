@@ -368,6 +368,7 @@ impl Collector {
         node.avg = own_avg;
         node.children = children;
         glue_single_child(&mut node);
+        node.detail.leads_into = leads_into(&node);
         node.detail.child_count = node.children.len();
         node
     }
@@ -481,6 +482,31 @@ pub fn unix_now() -> f64 {
 /// link that has none leaves the row with none. That is the honest reading:
 /// showing the first link's command under a label naming the last link's pid is
 /// the confusion the chain list exists to prevent.
+/// The container a row leads into (D-30). A runtime shim belongs to
+/// `containerd.service` and its whole work is inside the container it started,
+/// so the row keeps `containerd` in `OWNER` and gluing stops at that boundary -
+/// which left a level of the Docker rig showing 20 rows all named
+/// `containerd-shim`, one per container of the host.
+///
+/// Read after gluing, so what is looked at is the children the row really has.
+/// Exactly one of them, and it a container other than the row's own: a row with
+/// two containers under it names neither, because one row cannot name two and
+/// half a name is worse than none. An owner with no name of its own gives
+/// nothing to put in the parentheses.
+fn leads_into(node: &Node) -> Option<String> {
+    let [child] = node.children.as_slice() else {
+        return None;
+    };
+    let owner = child.detail.owner.as_ref()?;
+    if owner.kind != OwnerKind::Container
+        || owner.name.is_empty()
+        || node.detail.owner.as_ref() == Some(owner)
+    {
+        return None;
+    }
+    Some(owner.name.clone())
+}
+
 fn glue_single_child(node: &mut Node) {
     while node.children.len() == 1 && node.children[0].detail.owner == node.detail.owner {
         let mut child = node.children.remove(0);

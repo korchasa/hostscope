@@ -208,6 +208,15 @@ pub struct Detail {
     /// pid and its own name, and once a chain is glued the row's `name` is the
     /// whole of it. Empty where nothing was glued, which is the ordinary row.
     pub glued: Vec<(i32, String)>,
+    /// The container this row leads into, when the row itself belongs to
+    /// something else: a runtime shim keeps `containerd` in its `OWNER` column
+    /// and its whole work is one level down, inside the container (D-30). Set
+    /// only where the row has exactly one child and that child's owner is a
+    /// container other than the row's own - one row cannot name two. It is not
+    /// part of `name`: gluing builds `name` from the links it joins, and a
+    /// name that already carried the container would be repeated into every
+    /// row glued above it.
+    pub leads_into: Option<String>,
     pub own_netns: bool,
     pub io_total: Option<(f64, f64)>,
     pub vsz: Option<f64>,

@@ -353,6 +353,14 @@ impl App {
         if node.name.to_lowercase().contains(&needle) {
             return true;
         }
+        // The container a row leads into is drawn on the row, so the filter
+        // reaches it: typing a container name finds the row that leads into it
+        // as well as the processes inside it (D-30).
+        if let Some(container) = &node.detail.leads_into {
+            if container.to_lowercase().contains(&needle) {
+                return true;
+            }
+        }
         if node.kind.label().contains(&needle) {
             return true;
         }

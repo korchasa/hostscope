@@ -1274,6 +1274,38 @@ D-29. The page keys, and a filter that says what it is. DECIDED
   now undoes the narrowing nearest at hand in one order: the card, then
   the filter, then the level.
 
+D-30. The row a shim stands on says which container is under it. DECIDED
+2026-08-29 by the operator, after reading a level of the Docker rig where
+twenty rows in a row read `containerd-shim`.
+
+- Measured on the Docker rig the same day: the level under `systemd`
+  held 75 rows, and 20 of them were a service process with exactly one
+  child whose owner was a container. All 20 containers of the host stood
+  behind such a row, and sorted by memory they gather at the top - so the
+  first screen of the level was a wall of identical names that answered
+  nothing.
+- What D-25 decided still stands. The shim belongs to `containerd` and
+  the work inside the container does not, so gluing the two into one row
+  would put a name in `OWNER` that half the row does not belong to. What
+  was missing at that boundary was not gluing but a name.
+- The row therefore keeps its own name, its own owner and its own place,
+  and says in parentheses which container is under it:
+  `containerd-shim (web-frontend)`. The rule is narrow - exactly one
+  child, and that child's owner a container other than the row's own.
+  Nothing on the Docker rig fell outside it: every one of the 20 cases
+  had a single child, and no row had two different containers under it.
+- The parenthesised name is part of what the row shows, so the filter
+  reaches it and the match is marked there like anywhere else (D-29).
+  Filtering by a container name now finds the row that leads into the
+  container as well as the processes inside it.
+- The list view does not change. Its rows are the ends of the subtree and
+  already carry the container as their owner.
+- The name is truncated from the right like any other name (section 11),
+  so in a column too narrow for both halves what is cut is the
+  parenthesised one. The alternative - cutting the process name to keep
+  the container - would make two rows of different processes read alike,
+  which is the confusion the row's own name is there to prevent.
+
 ## 10. Definition of done
 
 The work is finished when:
@@ -1349,6 +1381,10 @@ worth carrying next to the requirements:
 - A node with children is marked in its name, a node without children is
   not. The reader must see where drilling makes sense before pressing a
   key.
+- A row whose single child belongs to a container names that container in
+  parentheses after its own name and keeps its own owner. The shim that
+  starts a container is a real process of the runtime; what the reader is
+  looking for is what it leads to (D-30).
 - A non-zero value draws at least one tick of the bar. An empty cell
   reads as zero, and 0 and 0.004 cores are different things.
 - A name longer than its column is truncated with an ellipsis, the path

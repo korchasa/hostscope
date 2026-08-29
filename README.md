@@ -62,7 +62,10 @@ quarter of the forest was such pass-through nodes, and
 was seven levels of one row each. The figures are the first link's,
 which already cover the chain, and the card names every link with its
 pid. A change of owner ends a chain - a shim stepping into a container
-is a boundary worth seeing.
+is a boundary worth seeing. Such a row says in parentheses which
+container is under it, so a level full of runtime shims reads
+`containerd-shim (web-frontend)` instead of the same name twenty times
+over, and the filter finds the row by that name as well.
 
 `v` lays the subtree of the level out as a flat list of its ends, which
 is how the process eating the host is found without knowing which branch

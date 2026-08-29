@@ -549,6 +549,7 @@ linter catches layout, not meaning.
 | FR-20 | V1 over the three environment shapes: every container named on every process it runs, the filter finding those processes by the container name and by the kind of owner; every owner the model names is on a drawn row |
 | D-25 | V1: a chain of single children is one row named for the whole chain, and its card names every link with its pid - over a chain of seven under a six-digit pid, at two widths, because a short chain and a three-digit pid are the two sizes at which a lost link stays invisible; V4: a card that cannot hold it says how many lines it hid, checked at the height that holds the card exactly and one line below it, because a guard on a comparison is wrong by one line at a time; V4: a pid too wide for its room is marked as cut, at four widths from 24 cells up, because a silent cut names another process; V3: the walk uses `Enter`, `BSpace` and `i` |
 | D-26 | Invariant 8: the `OWNER` column is demanded on every frame, no longer only where it happens to be drawn |
+| D-30 | V1 over a snapshot holding a shim with one child in a container: the row names the container in parentheses and keeps its own owner, a row with two containers under it names neither, and the filter typed with the container name finds the row that leads into it |
 | Section 6 | Section 9 of this document |
 
 ## 14. Link to the requirements

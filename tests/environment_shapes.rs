@@ -11,6 +11,12 @@ mod support;
 use support::{frames, run, Fixture};
 
 fn walk(f: &Fixture, keys: &str) -> Vec<Vec<String>> {
+    walk_at(f, keys, "100x30")
+}
+
+/// The same walk at a stated terminal size. Width is what decides how much of a
+/// name is drawn, so a test about a name has to say which width it means.
+fn walk_at(f: &Fixture, keys: &str, size: &str) -> Vec<Vec<String>> {
     frames(&run(&[
         "--cgroup-root",
         f.cgroup_root().to_str().unwrap(),
@@ -23,7 +29,7 @@ fn walk(f: &Fixture, keys: &str) -> Vec<Vec<String>> {
         "--tick",
         "60",
         "--size",
-        "100x30",
+        size,
         "--keys",
         keys,
     ]))
@@ -211,6 +217,79 @@ fn the_filter_reaches_what_runs_a_process() {
     ));
     assert_eq!(by_id.len(), 1, "{by_id:?}");
     assert!(by_id[0].contains("postgres"), "{by_id:?}");
+}
+
+/// D-30: a shim is a real process of the runtime and keeps `containerd` in its
+/// `OWNER` column, so the level it stands on used to be a wall of rows all
+/// reading `containerd-shim` - 20 of the 75 rows under `systemd` on the Docker
+/// rig, one for every container of the host. The row now says in parentheses
+/// what it leads into, and a row that leads into two containers says nothing:
+/// one row cannot name two, and half a name is worse than none.
+#[test]
+fn a_row_leading_into_one_container_names_it() {
+    let f = Fixture::new("shim-boundary");
+    f.shape_shim_boundary();
+
+    let level = walk_at(&f, &under("systemd"), "160x30");
+    let leading = table(&level)
+        .into_iter()
+        .find(|l| l.contains("containerd-shim ("))
+        .unwrap_or_else(|| {
+            panic!(
+                "no row names the container it leads into in:\n{}",
+                table(&level).join("\n")
+            )
+        });
+
+    assert!(
+        leading.contains("(5b21e4f70a9c)"),
+        "the row must name the container under it: {leading:?}"
+    );
+    assert!(
+        leading.contains("containerd"),
+        "and keep its own owner, which is the runtime: {leading:?}"
+    );
+    let two: Vec<String> = table(&level)
+        .into_iter()
+        .filter(|l| l.contains("containerd-shim"))
+        .collect();
+    assert_eq!(two.len(), 2, "{two:?}");
+    assert_eq!(
+        two.iter().filter(|l| l.contains('(')).count(),
+        1,
+        "the shim with two containers under it names neither: {two:?}"
+    );
+
+    // A column too narrow for both halves cuts the parenthesised one, with the
+    // ellipsis that marks every other cut (D-30, section 11). The row still
+    // reads as the process it is: cutting the process name instead would make
+    // two rows of different processes read alike.
+    let narrow = table(&walk(&f, &under("systemd")))
+        .into_iter()
+        .find(|l| l.contains("containerd-shim ("))
+        .unwrap_or_else(|| panic!("nothing leads into a container at 100 cells"));
+    assert!(narrow.contains('\u{2026}'), "the cut is marked: {narrow:?}");
+    assert!(
+        !narrow.contains("(5b21e4f70a9c)"),
+        "and it is the container half that is cut: {narrow:?}"
+    );
+}
+
+/// The name in parentheses is part of what the row shows, so the filter reaches
+/// it and the row that leads into a container is found by that container's name
+/// (D-30, D-29). Without this the reader types the name, the row says it, and
+/// the row disappears.
+#[test]
+fn the_filter_reaches_the_container_a_row_leads_into() {
+    let f = Fixture::new("shim-filter");
+    f.shape_shim_boundary();
+
+    let found = table(&walk(
+        &f,
+        &format!("{} / 5 b 2 1 e 4 f 7 0 a 9 c Enter", under("systemd")),
+    ));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("containerd-shim"), "{found:?}");
 }
 
 /// The owner column labels rows, it does not build them. Whatever the shape of
