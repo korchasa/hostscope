@@ -18,71 +18,37 @@ marks unavailable rather than showing as a zero.
 
 ## What it shows
 
-What the host runs, one level at a time, with CPU in busy cores, memory,
-disk and network in every row. The tree is the process forest: every row
-is a process and stands under the process that started it, which is the
-one hierarchy that answers "what started this" without the reader having
-to know how the host arranges its cgroups.
+![A level of a Kubernetes node in hostscope](docs/screenshot.png)
 
-What runs a process is a property of the row rather than a level of the
-tree. The `OWNER` column names it - the container, the service, the
-login session - read from the cgroup the process sits in, and it
-recognises a container whether the runtime is Docker with either cgroup
-driver, containerd under Kubernetes, or podman. The column is always
-there and always the name; where nothing runs a row, it is blank. The
-filter reaches it, so `grafana` finds every process of that container
-wherever its runtime hung them in the forest.
-
-A row marked `>` has children. `Enter` goes deeper, `Backspace` comes
-back, and on a row with nothing under it `Enter` opens the card instead,
-because there is nowhere to go. `PageUp` and `PageDown` move by a
-screenful. `i` opens the card of any row - a process, or the `(self)`
-remainder of one. `c m d n` sort, `/` filters by name, by command line
-and by owner, `a` switches between the average since start, which it
-opens in, and the last interval. `-` and `+` move the refresh interval
-between a pause, 1, 2, 3, 5, 10, 30 and 60 seconds - it opens at three -
-and the interval stands on the key line between the two keys; space
-reaches the pause in one key. CPU is written in busy cores and in nothing
-else.
-
-The bar beside a column belongs to the sorting: it stands next to the
-value the rows are ordered by and moves with it, so the longest bar is
-always the top row.
-
-A filter that is on says so on the path line, with what was typed and
-how many rows it left, and the match is marked wherever it is drawn -
-in the name, in the path in front of it, in the owner, and in the command
-line under the table. `Esc` drops it. `Esc` undoes the narrowing nearest
-at hand, in that order: the card, then the filter, then the level.
-
-A chain of processes where each one started only the next, all with the
-same owner, is one row named for the whole chain. On the test host a
-quarter of the forest was such pass-through nodes, and
-`supervisor/app/python3/npm exec chrome/sh/chrome-devtools/node`
-was seven levels of one row each. The figures are the first link's,
-which already cover the chain, and the card names every link with its
-pid. A change of owner ends a chain - a shim stepping into a container
-is a boundary worth seeing. Such a row says in parentheses which
-container is under it, so a level full of runtime shims reads
-`containerd-shim (web-frontend)` instead of the same name twenty times
-over, and the filter finds the row by that name as well.
-
-`v` lays the subtree of the level out as a flat list of its ends, which
-is how the process eating the host is found without knowing which branch
-it sits on. A row is a process with nothing under it, or the `(self)`
-remainder of one that has children - together they are the level split
-up, so the list adds up to the same total the tree does, and the work a
-process does itself does not vanish from it. Each row carries the chain
-of names it came from, the filter reaches all of them at once, and `→`
-puts the row among its neighbours: the level it lives on, however deep
-that is.
-
-A row owned by a container carries the name, image and state from the
-Docker socket, filled in by a background thread, so a slow socket never
-holds up a frame. What cannot be read is marked unavailable - never
-replaced with a zero. Names are shown in their own script, whatever it
-is; only what would drive the terminal is stripped out, and columns are
-measured in cells.
+- The tree is the process forest. Every row is a process and stands
+  under the process that started it.
+- Every row carries CPU in busy cores, memory, tasks, disk read and
+  write, and network down and up - for the process and everything under
+  it.
+- `OWNER` names what runs the process: a container, a service, a login
+  session. It reads Docker with either cgroup driver, containerd under
+  Kubernetes, and podman.
+- A row that leads into a container names it in parentheses, and one
+  that leads into a pod of several names the pod.
+- A chain of processes where each started only the next is drawn as one
+  row named for the whole chain. A change of owner ends the chain.
+- `>` marks a row with something under it. `Enter` goes deeper,
+  `Backspace` comes back, `Esc` undoes the nearest narrowing.
+- `i` opens the card of a row: the command line, the pid, the chain, the
+  container image, and both measurement modes side by side.
+- `c m d n` sort. The bar stands beside the sorted column and moves with
+  it.
+- `/` filters by name, command line and owner. The match is marked
+  wherever it is drawn, and the path line says what was typed and how
+  many rows are left.
+- `v` lays the level out as a flat list of its ends, which finds the
+  process eating the host without knowing which branch it sits on.
+- `a` switches between the average since start and the last interval;
+  `-` and `+` move the interval between a pause and 60 seconds, and
+  space reaches the pause in one key.
+- What cannot be read is marked unavailable, never replaced with a zero.
+  Names are shown in their own script, and columns are measured in
+  cells.
 
 ## Building
 
