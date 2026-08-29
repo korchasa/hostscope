@@ -57,6 +57,10 @@ pub struct Cols {
     pub cpu: usize,
     pub bar: usize,
     pub mem: usize,
+    /// Drawn only where the host has moved something out of RAM. On a machine
+    /// whose swap device is untouched the column is a column of zeros, and the
+    /// cells are worth more to the name (D-35).
+    pub swap: bool,
     pub disk: bool,
     pub net: bool,
     /// The column the bar is drawn beside, which is the one the rows are
@@ -68,44 +72,54 @@ impl Cols {
     /// Thirteen cells for the `OWNER` column: twelve for a short container
     /// identifier and the space after it, because an identifier cut short is
     /// one that cannot be pasted anywhere.
-    pub fn plan(usable: usize, sort: Sort) -> Cols {
+    pub fn plan(usable: usize, sort: Sort, swap: bool) -> Cols {
         let kind = 13usize;
         let mut bar = 10usize;
+        let mut swap = swap;
         let mut disk = true;
         let mut net = true;
         // 27 cells of separators and fixed columns: the leading space, the two
         // spaces in front of every value column, `TASKS`, `CORES` and `MEM`.
         // The bar takes its width plus the space that sets it off from the
         // number it belongs to.
-        let fixed = |bar: usize, disk: bool, net: bool| {
+        let fixed = |bar: usize, swap: bool, disk: bool, net: bool| {
             27 + kind
                 + if bar > 0 { bar + 1 } else { 0 }
+                + if swap { 9 } else { 0 }
                 + if disk { 12 } else { 0 }
                 + if net { 13 } else { 0 }
         };
-        let mut name = usable as isize - fixed(bar, disk, net) as isize;
+        let mut name = usable as isize - fixed(bar, swap, disk, net) as isize;
         if name < 20 {
             bar = 6;
-            name = usable as isize - fixed(bar, disk, net) as isize;
+            name = usable as isize - fixed(bar, swap, disk, net) as isize;
+        }
+        // The swap column goes first of all, before the network: the line above
+        // the table already says how much swap the machine is using, so what
+        // this column adds is which row is in it - and on a terminal this
+        // narrow the names are what the reader has left to go on.
+        if name < 16 {
+            swap = false;
+            name = usable as isize - fixed(bar, swap, disk, net) as isize;
         }
         if name < 16 {
             net = false;
-            name = usable as isize - fixed(bar, disk, net) as isize;
+            name = usable as isize - fixed(bar, swap, disk, net) as isize;
         }
         if name < 14 {
             disk = false;
-            name = usable as isize - fixed(bar, disk, net) as isize;
+            name = usable as isize - fixed(bar, swap, disk, net) as isize;
         }
         if name < 12 {
             bar = 0;
-            name = usable as isize - fixed(bar, disk, net) as isize;
+            name = usable as isize - fixed(bar, swap, disk, net) as isize;
         }
         // A bar belongs to a column, so a column the width has already dropped
         // cannot carry one: the cells go back to the name instead, where on a
         // terminal this narrow they are worth more.
         if (sort == Sort::Disk && !disk) || (sort == Sort::Net && !net) {
             bar = 0;
-            name = usable as isize - fixed(bar, disk, net) as isize;
+            name = usable as isize - fixed(bar, swap, disk, net) as isize;
         }
         Cols {
             name: name.max(6) as usize,
@@ -114,6 +128,7 @@ impl Cols {
             cpu: 8,
             bar,
             mem: 7,
+            swap,
             disk,
             net,
             bar_at: sort,
@@ -423,6 +438,11 @@ fn header_line(cols: &Cols, u: usize) -> Line<'static> {
     spans.push(Span::styled(pad_left("TASKS", cols.tasks), dim()));
     column("CORES", cols.cpu, Sort::Cpu, &mut spans);
     column("MEM", cols.mem, Sort::Mem, &mut spans);
+    if cols.swap {
+        // Nothing sorts by it, so like `TASKS` it never carries a bar.
+        spans.push(Span::styled("  ".to_string(), dim()));
+        spans.push(Span::styled(pad_left("SWAP", 7), dim()));
+    }
     if cols.disk {
         column("DISK R/W", 10, Sort::Disk, &mut spans);
     }
@@ -433,7 +453,9 @@ fn header_line(cols: &Cols, u: usize) -> Line<'static> {
 }
 
 fn table_lines(app: &App, rows: &[Row], u: usize, content: usize, out: &mut Vec<Line<'static>>) {
-    let cols = Cols::plan(u, app.sort);
+    // The host row carries the machine's own swap, so it is also the answer to
+    // whether this host has swapped anything at all (D-35).
+    let cols = Cols::plan(u, app.sort, app.view().root.instant.swap.is_some());
     out.push(header_line(&cols, u));
 
     // The bar compares the rows by the value they are ordered by, so the
@@ -503,6 +525,12 @@ fn table_lines(app: &App, rows: &[Row], u: usize, content: usize, out: &mut Vec<
                     Sort::Mem,
                     &mut spans,
                 );
+                if cols.swap {
+                    spans.push(Span::styled(
+                        format!("  {}", pad_left(&or_na(m.swap, mem_str), 7)),
+                        base,
+                    ));
+                }
                 if cols.disk {
                     value(
                         format!("  {}", pad_left(&pair_rate_opt(m.rd, m.wr), 10)),
@@ -1503,27 +1531,32 @@ mod tests {
     fn the_column_plan_always_fits_the_width() {
         for u in 30..250usize {
             for sort in [Sort::Cpu, Sort::Mem, Sort::Disk, Sort::Net] {
-                let c = Cols::plan(u, sort);
-                let total = 27
-                    + c.kind
-                    + if c.bar > 0 { c.bar + 1 } else { 0 }
-                    + c.name
-                    + if c.disk { 12 } else { 0 }
-                    + if c.net { 13 } else { 0 };
-                assert!(
-                    total <= u || u < 60,
-                    "plan for {u} under {sort:?} takes {total}"
-                );
-                // A bar is only ever drawn beside a column that is drawn.
-                let column = match sort {
-                    Sort::Disk => c.disk,
-                    Sort::Net => c.net,
-                    _ => true,
-                };
-                assert!(
-                    column || c.bar == 0,
-                    "the bar for {sort:?} survived the column at {u}"
-                );
+                for swap in [false, true] {
+                    let c = Cols::plan(u, sort, swap);
+                    let total = 27
+                        + c.kind
+                        + if c.bar > 0 { c.bar + 1 } else { 0 }
+                        + c.name
+                        + if c.swap { 9 } else { 0 }
+                        + if c.disk { 12 } else { 0 }
+                        + if c.net { 13 } else { 0 };
+                    assert!(
+                        total <= u || u < 60,
+                        "plan for {u} under {sort:?} takes {total}"
+                    );
+                    // A column the host cannot fill is never planned for.
+                    assert!(swap || !c.swap, "a swap column with no swap at {u}");
+                    // A bar is only ever drawn beside a column that is drawn.
+                    let column = match sort {
+                        Sort::Disk => c.disk,
+                        Sort::Net => c.net,
+                        _ => true,
+                    };
+                    assert!(
+                        column || c.bar == 0,
+                        "the bar for {sort:?} survived the column at {u}"
+                    );
+                }
             }
         }
     }
@@ -1544,6 +1577,7 @@ mod tests {
             wr: Some(20.0),
             rx: Some(30.0),
             tx: Some(40.0),
+            swap: Some(50.0),
             tasks: Some(3.0),
         };
         a.avg = a.instant;

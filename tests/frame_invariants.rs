@@ -511,6 +511,7 @@ fn the_card_says_how_much_of_a_process_sits_in_swap() {
     build(&f);
     f.process_extras(101, 20, 2, 4400);
     f.process_swap(101, 2048);
+    f.process_hides_status(301);
     let card = scenario(&f, "v / s s h d Enter i", "100x40")
         .last()
         .unwrap()
@@ -544,6 +545,46 @@ fn the_card_says_how_much_of_a_process_sits_in_swap() {
     assert!(
         line.contains("n/a"),
         "a process whose status was never read should say so: {line:?}"
+    );
+}
+
+/// The swap column appears only on a host that has swapped something. Reading
+/// `VmSwap` for every process costs 4.5 ms a tick on a tree of 221 - measured
+/// on the Kubernetes rig on 2026-08-29 - and on a host with a free swap device
+/// that buys a column of zeros (D-35).
+#[test]
+fn the_swap_column_appears_only_on_a_host_that_has_swapped() {
+    let f = Fixture::new("swap-column");
+    build(&f);
+    f.host_swap(2_000_000, 1_000_000);
+    f.process_swap(101, 2048);
+    let frame = scenario(&f, "", "120x30").last().unwrap().clone();
+    let header = frame[6].clone();
+    assert!(
+        header.contains("SWAP"),
+        "the host has swapped and the table hides it:\n{header}"
+    );
+    // NAME, OWNER, TASKS, CORES, MEM, SWAP: the new column stands with the
+    // other memory figure, not at the end of the row.
+    assert!(
+        header.find("SWAP").unwrap() > header.find("MEM").unwrap(),
+        "the swap column is out of order:\n{header}"
+    );
+    let text = frame.join("\n");
+    assert!(
+        text.contains("2.0M"),
+        "the swapped process is not in the column:\n{text}"
+    );
+
+    // Nothing swapped: the column is not drawn at all, and the cells go back
+    // to the name.
+    let g = Fixture::new("swap-free");
+    build(&g);
+    let frame = scenario(&g, "", "120x30").last().unwrap().clone();
+    assert!(
+        !frame[6].contains("SWAP"),
+        "a host with a free swap device draws the column anyway:\n{}",
+        frame[6]
     );
 }
 

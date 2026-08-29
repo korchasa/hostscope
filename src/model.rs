@@ -79,6 +79,9 @@ pub struct Owner {
 pub struct Metrics {
     pub cpu: Option<f64>,
     pub mem: Option<f64>,
+    /// What the kernel has moved out of RAM, summed over the subtree. Read
+    /// only on a host that has swapped something (D-35).
+    pub swap: Option<f64>,
     pub tasks: Option<f64>,
     pub rd: Option<f64>,
     pub wr: Option<f64>,
@@ -92,6 +95,7 @@ impl Metrics {
     pub fn add(&mut self, o: &Metrics) {
         self.cpu = opt_add(self.cpu, o.cpu);
         self.mem = opt_add(self.mem, o.mem);
+        self.swap = opt_add(self.swap, o.swap);
         self.tasks = opt_add(self.tasks, o.tasks);
         self.rd = opt_add(self.rd, o.rd);
         self.wr = opt_add(self.wr, o.wr);

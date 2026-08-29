@@ -95,6 +95,16 @@ def lint(frame, name):
             bad.append(f"{name}: column {column} is missing or out of order")
             return bad
         at = pos + len(column)
+    # The swap column is optional - it is drawn only where the host has moved
+    # something out of RAM (D-35) - but where it is drawn it stands with the
+    # other memory figure, between MEM and DISK.
+    swap_at = header.find("SWAP")
+    if swap_at >= 0:
+        if swap_at < header.find("MEM"):
+            bad.append(f"{name}: the swap column stands in front of MEM")
+        disk_at = header.find("DISK")
+        if 0 <= disk_at < swap_at:
+            bad.append(f"{name}: the swap column stands past DISK")
     owner_col = header.find("OWNER")
     mem_col = header.find("MEM") - 4
     cpu_end = header.find("CORES") + 5

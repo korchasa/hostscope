@@ -83,16 +83,36 @@ impl Fixture {
              Max open files            524287               524288               files\n",
         );
         write_file(&dir.join("smaps_rollup"), &format!("Pss:  {pss_kb} kB\n"));
-        write_file(&dir.join("status"), "VmSwap:\t       0 kB\n");
     }
 
-    /// How much of the process the kernel has moved out of RAM. Written after
-    /// `process_extras`, which puts a zero there: a card shows the row either
-    /// way, and the two cases read differently.
+    /// How much of the process the kernel has moved out of RAM. Every process
+    /// of a fixture has a `status` file with a zero in it, as a live host has
+    /// for every process with an address space; this overwrites the zero.
     pub fn process_swap(&self, pid: i32, kb: u64) {
         let dir = self.proc_root().join(pid.to_string());
         fs::create_dir_all(&dir).unwrap();
-        write_file(&dir.join("status"), &format!("VmSwap:\t{kb} kB\n"));
+        write_file(
+            &dir.join("status"),
+            &format!("Name:\tx\nUid:\t0\t0\t0\t0\nThreads:\t1\nVmSwap:\t{kb} kB\n"),
+        );
+    }
+
+    /// A process whose `status` cannot be read. A kernel thread has no
+    /// `VmSwap` line at all, and the screen has to say so rather than draw a
+    /// zero (D-13).
+    pub fn process_hides_status(&self, pid: i32) {
+        let _ = fs::remove_file(self.proc_root().join(pid.to_string()).join("status"));
+    }
+
+    /// What the machine says about its own swap. The default fixture has half
+    /// of it in use; a host that has swapped nothing draws no swap column.
+    pub fn host_swap(&self, total_kb: u64, free_kb: u64) {
+        write_file(
+            &self.proc_root().join("meminfo"),
+            &format!(
+                "MemTotal:       16000000 kB\nMemAvailable:    8000000 kB\nSwapTotal:       {total_kb} kB\nSwapFree:        {free_kb} kB\n"
+            ),
+        );
     }
 
     /// One process, in the shape `/proc/<pid>/stat` has on a live host.
@@ -114,9 +134,11 @@ impl Fixture {
                 cpu_ticks
             ),
         );
+        // `VmSwap` is here on a live host for every process with an address
+        // space, and the swap column of the table is read out of it.
         write_file(
             &dir.join("status"),
-            "Name:\tx\nUid:\t0\t0\t0\t0\nThreads:\t1\n",
+            "Name:\tx\nUid:\t0\t0\t0\t0\nThreads:\t1\nVmSwap:\t       0 kB\n",
         );
         write_file(&dir.join("cmdline"), &cmdline.replace(' ', "\0"));
     }
@@ -353,7 +375,9 @@ impl Fixture {
         write_file(&dir.join("stat"), &stat);
         write_file(
             &dir.join("meminfo"),
-            "MemTotal:       16000000 kB\nMemAvailable:    8000000 kB\nSwapTotal:       2000000 kB\nSwapFree:        1000000 kB\n",
+            // A swap device the host has not touched, which is what the rigs
+            // report: the swap column is drawn only where something is in it.
+            "MemTotal:       16000000 kB\nMemAvailable:    8000000 kB\nSwapTotal:       2000000 kB\nSwapFree:        2000000 kB\n",
         );
         write_file(
             &dir.join("net/dev"),

@@ -29,6 +29,10 @@ pub struct ProcSample {
     pub rss: f64,
     pub vsz: f64,
     pub io: Option<(f64, f64)>,
+    /// `VmSwap` from `/proc/<pid>/status`, read only where the host has
+    /// swapped something (D-35). `None` where the file could not be read or
+    /// carries no such line, which is every kernel thread.
+    pub swap: Option<f64>,
 }
 
 /// Everything a process card adds on top of the sample. Fields root would have
@@ -60,7 +64,13 @@ pub type CmdCache = std::collections::HashMap<i32, (u64, Option<String>, u32)>;
 /// command line and the I/O counters. Off the visible level the command line
 /// comes from the cache and the I/O is not read at all: neither can reach the
 /// screen from there, and both cost a syscall per process per tick.
-pub fn read(proc_root: &Path, pid: i32, deep: bool, cache: &mut CmdCache) -> Option<ProcSample> {
+pub fn read(
+    proc_root: &Path,
+    pid: i32,
+    deep: bool,
+    want_swap: bool,
+    cache: &mut CmdCache,
+) -> Option<ProcSample> {
     let dir = proc_root.join(pid.to_string());
     let stat = crate::collect::cgroup::read_file(&dir.join("stat"))?;
     let parsed = parse_stat(&stat)?;
@@ -92,6 +102,15 @@ pub fn read(proc_root: &Path, pid: i32, deep: bool, cache: &mut CmdCache) -> Opt
             )
         })
     };
+    // `status` is generated line by line by the kernel and costs about twice
+    // what `stat` costs: measured on the Kubernetes rig on 2026-08-29, 2.7 ms
+    // for `stat` over 221 processes against 7.2 ms for both. That is why it is
+    // read only where its one useful line can be non-zero (D-35).
+    let swap = if want_swap {
+        crate::collect::cgroup::read_file(&dir.join("status")).and_then(|t| vm_swap(&t))
+    } else {
+        None
+    };
     Some(ProcSample {
         ppid: parsed.ppid,
         comm: parsed.comm.clone(),
@@ -103,7 +122,24 @@ pub fn read(proc_root: &Path, pid: i32, deep: bool, cache: &mut CmdCache) -> Opt
         rss: parsed.rss_pages * PAGE_SIZE,
         vsz: parsed.vsize,
         io,
+        swap,
     })
+}
+
+/// The one line of `/proc/<pid>/status` this tool reads. A process without an
+/// address space - every kernel thread - has no such line, and the answer is
+/// then absent rather than zero (D-13).
+pub fn vm_swap(text: &str) -> Option<f64> {
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("VmSwap:") {
+            return rest
+                .split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<f64>().ok())
+                .map(|kb| kb * 1024.0);
+        }
+    }
+    None
 }
 
 fn read_cmdline(dir: &Path) -> Option<String> {
@@ -216,19 +252,7 @@ pub fn extras(proc_root: &Path, pid: i32) -> ProcExtras {
     }
 
     match fs::read_to_string(dir.join("status")) {
-        Ok(text) => {
-            for line in text.lines() {
-                if let Some(rest) = line.strip_prefix("VmSwap:") {
-                    if let Some(kb) = rest
-                        .split_whitespace()
-                        .next()
-                        .and_then(|v| v.parse::<f64>().ok())
-                    {
-                        e.swap = Some(kb * 1024.0);
-                    }
-                }
-            }
-        }
+        Ok(text) => e.swap = vm_swap(&text),
         // A kernel thread has no address space and no `VmSwap` line at all, so
         // an absent value is left absent rather than turned into a zero (D-13).
         Err(_) => e.restricted.push("swap"),

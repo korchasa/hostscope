@@ -110,9 +110,10 @@ fn node_json(node: &Node, depth: usize, out: &mut String) {
 
 fn metrics_json(m: &Metrics, out: &mut String) {
     out.push_str(&format!(
-        "{{\"cpu\": {}, \"mem\": {}, \"tasks\": {}, \"rd\": {}, \"wr\": {}, \"rx\": {}, \"tx\": {}}}",
+        "{{\"cpu\": {}, \"mem\": {}, \"swap\": {}, \"tasks\": {}, \"rd\": {}, \"wr\": {}, \"rx\": {}, \"tx\": {}}}",
         opt(m.cpu),
         opt(m.mem),
+        opt(m.swap),
         opt(m.tasks),
         opt(m.rd),
         opt(m.wr),

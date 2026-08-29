@@ -1415,6 +1415,33 @@ explanations.
   `memory.swap.current` in its cgroup, which is a second source and a
   second read; it is left for the host that needs it.
 
+D-35. The swap column is drawn only on a host that has swapped
+something. DECIDED 2026-08-29 by the operator, after the swap figure
+reached the card (D-34).
+
+- The figure is `VmSwap` from `/proc/<pid>/status`, one file per process
+  per tick, and a parent row carries the sum of its subtree like every
+  other column (FR-5).
+- Measured on the Kubernetes rig on 2026-08-29 with a program that makes
+  exactly these reads, 221 processes, 21 rounds, median: the `stat` pass
+  the collector already makes costs 2.69 ms, the same pass with `status`
+  beside it costs 7.22 ms. The column therefore costs 4.5 ms a tick.
+  Against the own-CPU requirement of section 6 that is about 0.45 percent
+  of one core at the one second interval the measurements use, and a
+  third of that at the three second interval the application opens at.
+- On a host whose swap device is untouched those 4.5 ms buy a column of
+  zeros: none of the 221 processes on that rig had a byte in swap. So the
+  machine is asked first - `SwapTotal` and `SwapFree` are read for the
+  header anyway - and the per-process reads happen only where the answer
+  can be something.
+- The column is not sortable. The key map is a settled thing and adding a
+  letter to it is its own decision; what the column gives without one is
+  which row is in swap, on a screen the reader is already looking at.
+- The cgroup route was rejected. `memory.swap.current` costs 0.77 ms for
+  the 90 files of that rig and the collector already walks the tree, but
+  it names a cgroup rather than a process, so the process rows - which
+  are most of the table (D-24) - would stay empty.
+
 ## 10. Definition of done
 
 The work is finished when:
@@ -1485,9 +1512,13 @@ worth carrying next to the requirements:
 ### Mandatory rules of the screen
 
 - The column set and order are the same on every level: name, owner,
-  tasks, cores, memory, disk read/write, network down/up. Changing
+  tasks, cores, memory, swap, disk read/write, network down/up. Changing
   the level does not change the columns - otherwise the eye has to find
   the column again every time.
+- Swap is the one column the host decides about. It is drawn only where
+  the machine has moved something out of RAM, and it is then the same on
+  every level like the rest; where the swap device is untouched the
+  column is not drawn at all and the cells go to the name (D-35).
 - The bar is not a column of its own but a strip beside the column the
   rows are ordered by, and it moves with the sorting (D-27).
 - The details of the selected row go on a separate line under the table,

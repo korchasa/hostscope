@@ -349,6 +349,9 @@ Every invariant is checked on any frame and refers to a requirement.
     parent split up rather than a second reading of it.
 14. Every CPU figure is a core count: the column is headed `CORES` and
     no percentage appears anywhere on the frame (FR-1a, D-25).
+15. The swap column, where a frame has one, stands between `MEM` and
+    `DISK`. It is the one optional column - a host that has swapped
+    nothing draws no `SWAP` at all (D-35).
 
 ## 8. Induced states
 
@@ -436,11 +439,13 @@ passed, none failed, one skipped, in 113 seconds. The frame linter went
 over 133 frames rather than the 29 the `tmux` walks used to produce -
 spelling a filter one key per frame yields a frame per letter, and each
 one is checked against every invariant for free. A 50 percent quota
-showed as 0.496 cores, the search found its node among 616, collection
-took 43.2 ms at the 95th percentile and a redraw 1.0 ms, the first frame
-arrived after 16.2 ms, the application sent 478 bytes per frame with no
-full screen clear in 20 seconds, and it spent 3.31 percent of one core
-and 1.2 MB on itself. `strace` showed one `execve`, no file opened for
+showed as 0.502 cores, the search found its node among 615, collection
+took 41.5 ms at the 95th percentile and a redraw 1.0 ms, the first frame
+arrived after 15.6 ms, the application sent 470 bytes per frame with no
+full screen clear in 20 seconds, and it spent 3.22 percent of one core
+and 1.2 MB on itself. That rig has swapped nothing, so it draws no swap
+column and pays nothing for it (D-35): the figure is the same as before
+the column existed. `strace` showed one `execve`, no file opened for
 writing and no `/proc/<pid>/environ` opened at all.
 
 The skipped check is the container with a 120 character name: that rig
@@ -557,6 +562,7 @@ linter catches layout, not meaning.
 | D-32 | V1 over a snapshot with the files, limits and PSS of a process: the card heads its two figure columns once, starts every `now` and every `avg` at the same cell, and gives `own virtual`, `own PSS`, `sockets`, `nofile` and `nproc` a label each |
 | D-33 | V1 over a snapshot with a command line longer than the terminal: `pid`, `parent`, `user`, `threads` and `started` each have a label, the command wraps under its own label with nothing lost, and invariant 1 holds on every wrapped line. At 70 and 60 cells the explanations beside the figures and the cgroup path are whole once the wrapped lines are joined, and a pid the room cannot hold is marked as cut rather than broken |
 | D-34 | V1 over a snapshot: the card of a process whose `VmSwap` says 2048 kB shows `own swap  2.0M`, and the card of a process with no `status` file shows the row with `n/a` rather than leaving it out |
+| D-35 | V1 over two snapshots: a host whose `SwapFree` is below its `SwapTotal` draws a `SWAP` column between `MEM` and `DISK` carrying the `VmSwap` of the row, and a host whose swap device is untouched draws no such column. Invariant 15 of `scripts/frame-lint.py` holds the position of the column on every captured frame |
 | Section 6 | Section 9 of this document |
 
 ## 14. Link to the requirements

@@ -163,12 +163,22 @@ impl Collector {
         if self.cmd_cache.len() > 8192 {
             self.cmd_cache.clear();
         }
+        // Reading `VmSwap` for every process costs about 4.5 ms a tick on a
+        // tree of 221, and on a host whose swap device is untouched it buys a
+        // column of zeros. So the machine is asked first (D-35).
+        let swap_in_use = summary.swap_used > 0.0;
         let mut samples: HashMap<i32, procs::ProcSample> = HashMap::new();
         for pid in owners.keys() {
             // Every row is read in full: a parent row carries the totals of its
             // whole subtree (FR-5), so the disk of any row on screen needs the
             // disk of every process under it.
-            if let Some(s) = procs::read(&self.proc_root, *pid, true, &mut self.cmd_cache) {
+            if let Some(s) = procs::read(
+                &self.proc_root,
+                *pid,
+                true,
+                swap_in_use,
+                &mut self.cmd_cache,
+            ) {
                 samples.insert(*pid, s);
             }
         }
@@ -218,11 +228,13 @@ impl Collector {
         node.instant = Metrics {
             cpu: Some(summary.busy_cores),
             mem: Some(summary.mem_used),
+            swap: swap_in_use.then_some(summary.swap_used),
             ..totals
         };
         node.avg = Metrics {
             cpu: Some(summary.busy_cores_avg),
             mem: Some(summary.mem_used_avg),
+            swap: swap_in_use.then_some(summary.swap_used_avg),
             ..avg_totals
         };
         node
@@ -274,6 +286,7 @@ impl Collector {
         let mut own_instant = Metrics {
             cpu: Some(cpu.instant),
             mem: Some(mem.instant),
+            swap: s.swap,
             tasks: Some(tasks.instant),
             rd: rd.map(|r| r.instant),
             wr: wr.map(|r| r.instant),
@@ -283,6 +296,7 @@ impl Collector {
         let mut own_avg = Metrics {
             cpu: Some(cpu.average),
             mem: Some(mem.average),
+            swap: s.swap,
             tasks: Some(tasks.average),
             rd: rd.map(|r| r.average),
             wr: wr.map(|r| r.average),
