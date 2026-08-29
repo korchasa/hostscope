@@ -244,6 +244,24 @@ pidstat() {
   fi
 }
 
+network() {
+  part "4. the host network rates against netlink (V2)"
+  # The two network figures of the header had nothing checking them: the oracle
+  # does not read them and pidstat has nothing to say about a namespace. The
+  # application sums `/proc/<pid>/net/dev`; iproute2 asks the kernel for the
+  # same counters over netlink, which is a different door into the kernel and
+  # somebody else's code walking through it.
+  if ! command -v ip >/dev/null 2>&1; then
+    skip "iproute2 is not installed on this host, so netlink cannot be compared"
+    return
+  fi
+  if sudo -n python3 "$DIR/netlink-check.py" "$BIN" --window 10; then
+    pass "the host network rates agree with the ones netlink reports"
+  else
+    fail "the host network rates disagree with netlink"
+  fi
+}
+
 scenario() {
   part "5. a walk down the forest and back (FR-2)"
   # Enter goes down, Backspace comes back, i opens the card of any row (D-25).
@@ -875,7 +893,7 @@ cleanup() {
 
 # The order follows the section numbers the parts print, so a log reads in
 # the order of the verification document.
-ALL="prepare baseline oracle pidstat scenario keys linter security induced_load induced_disk induced_many induced_vanishing induced_names degraded sizes measurements cleanup"
+ALL="prepare baseline oracle pidstat network scenario keys linter security induced_load induced_disk induced_many induced_vanishing induced_names degraded sizes measurements cleanup"
 # Each section is timed: the run costs minutes, and the only way to know which
 # minute is worth paying for is to see where it goes.
 for section in ${*:-$ALL}; do

@@ -256,6 +256,19 @@ Removing the division by a hundred from its own reading of `%CPU` makes
 seventeen rows disagree by exactly that factor, which is how it is known
 to be able to fail.
 
+The two network figures of the header had nothing behind them at all: the
+oracle does not read them, and `pidstat` has nothing to say about a
+network namespace. `scripts/netlink-check.py` asks iproute2 for the same
+counters over netlink - a different door into the kernel, walked through
+by somebody else's code - and compares the delta over the window against
+the host row. The two agree closely: 2089 against 2087 bytes a second in
+and 11485 against 11478 out on the Kubernetes rig on 2026-08-29, which is
+why the tolerance is 10 percent with a floor of 512 bytes a second. The
+floor was 16 KB a second at first and made the check inert - this host
+talks at a few kilobytes a second, so a probe that doubled the rate
+passed with the whole difference sitting under the floor. With the low
+floor that probe fails, which is how the check is known to be able to.
+
 V3. **Scenarios through tmux.** A walk down the forest and back, the
 card on every level, sorting, search, filter, pause. What is checked is not only
 the final screen but also that `Esc` returns to the same row (FR-2) and
@@ -456,8 +469,8 @@ sudo systemd-run --scope --slice=hs -p CPUQuota=50% --unit=hs-steady -q \
   screen clear does not arrive on every frame: for `htop` it did not
   arrive once in two seconds.
 
-**The last full run, on the Kubernetes rig, 2026-08-29.** 38 checks
-passed, none failed, one skipped, in 123 seconds. The frame linter went
+**The last full run, on the Kubernetes rig, 2026-08-29.** 39 checks
+passed, none failed, one skipped, in 134 seconds. The frame linter went
 over 133 frames rather than the 29 the `tmux` walks used to produce -
 spelling a filter one key per frame yields a frame per letter, and each
 one is checked against every invariant for free. It is the first run on
@@ -568,7 +581,7 @@ linter catches layout, not meaning.
 | FR-8 | Induced state "without root" with a separate user |
 | FR-9 | V7: a canary in the environment, searched across frames and log; no `environ` in the `openat` trace |
 | FR-10 | V7: `strace` on `execve` and `openat`, plus the build-time check |
-| FR-11 | Induced state "container network"; for host processes the unavailability marker |
+| FR-11 | Induced state "container network"; for host processes the unavailability marker; the host rates against netlink (V2) |
 | FR-12 | Invariant 2 on every frame, induced state "non-ASCII name" (FR-4 was withdrawn by D-17) |
 | FR-13 | Induced state "spike against steady load", two snapshots with a known pause |
 | FR-14 | Invariants 5 and 6, induced states "memory" and "disappearing processes" |
