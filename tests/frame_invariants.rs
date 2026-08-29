@@ -588,6 +588,51 @@ fn the_swap_column_appears_only_on_a_host_that_has_swapped() {
     );
 }
 
+/// A kernel thread has no `VmSwap` line because it has no address space, and
+/// nothing without an address space can be moved out of RAM. That is a zero,
+/// not an unknown - and an unknown there poisons every remainder above it,
+/// which on the top level is the `(self)` row of FR-14 (D-36).
+#[test]
+fn a_process_that_cannot_be_swapped_counts_as_zero_rather_than_unknown() {
+    let f = Fixture::new("swap-kernel");
+    build(&f);
+    f.host_swap(2_000_000, 1_000_000);
+    // A root of its own whose whole subtree has no address space, which is
+    // what `kthreadd` is on a live host.
+    f.cgroup("kthread.scope", &[900]);
+    f.process(900, 0, "hs-kthreadd", 5, 0, "");
+    f.process_without_swap_line(900);
+    let frame = scenario(&f, "", "140x30").last().unwrap().clone();
+    let text = frame.join("\n");
+    let head: Vec<char> = frame[6].chars().collect();
+    let at = char_find(&head, "SWAP", 0).expect("no swap column");
+    let cell = |line: &str| -> String {
+        line.chars()
+            .skip(at.saturating_sub(3))
+            .take(10)
+            .collect::<String>()
+            .trim()
+            .to_string()
+    };
+    let row = frame
+        .iter()
+        .find(|l| l.contains("hs-kthreadd"))
+        .unwrap_or_else(|| panic!("no row for the process in:\n{text}"));
+    assert!(
+        !cell(row).contains("n/a"),
+        "a process that cannot be swapped reads as unknown: {row:?}"
+    );
+    // And with no unknown under it, the remainder of the level is a number.
+    let own = frame
+        .iter()
+        .find(|l| l.contains("(self)"))
+        .unwrap_or_else(|| panic!("no (self) row in:\n{text}"));
+    assert!(
+        !cell(own).contains("n/a"),
+        "the remainder is unknown although every child reported: {own:?}"
+    );
+}
+
 /// The explanations on the card are text like any other, and a narrow terminal
 /// used to cut them mid-word against the border - the reader saw "shared pages
 /// divid" and had nothing to do with it. They wrap now (D-33).

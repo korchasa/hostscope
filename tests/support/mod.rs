@@ -97,6 +97,18 @@ impl Fixture {
         );
     }
 
+    /// A process whose `status` is there but carries no `VmSwap` line, which
+    /// is every kernel thread on a live host: no address space, so nothing of
+    /// it can be moved out of RAM.
+    pub fn process_without_swap_line(&self, pid: i32) {
+        let dir = self.proc_root().join(pid.to_string());
+        fs::create_dir_all(&dir).unwrap();
+        write_file(
+            &dir.join("status"),
+            "Name:\tx\nUid:\t0\t0\t0\t0\nThreads:\t1\n",
+        );
+    }
+
     /// A process whose `status` cannot be read. A kernel thread has no
     /// `VmSwap` line at all, and the screen has to say so rather than draw a
     /// zero (D-13).

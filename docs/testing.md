@@ -563,6 +563,7 @@ linter catches layout, not meaning.
 | D-33 | V1 over a snapshot with a command line longer than the terminal: `pid`, `parent`, `user`, `threads` and `started` each have a label, the command wraps under its own label with nothing lost, and invariant 1 holds on every wrapped line. At 70 and 60 cells the explanations beside the figures and the cgroup path are whole once the wrapped lines are joined, and a pid the room cannot hold is marked as cut rather than broken |
 | D-34 | V1 over a snapshot: the card of a process whose `VmSwap` says 2048 kB shows `own swap  2.0M`, and the card of a process with no `status` file shows the row with `n/a` rather than leaving it out |
 | D-35 | V1 over two snapshots: a host whose `SwapFree` is below its `SwapTotal` draws a `SWAP` column between `MEM` and `DISK` carrying the `VmSwap` of the row, and a host whose swap device is untouched draws no such column. Invariant 15 of `scripts/frame-lint.py` holds the position of the column on every captured frame |
+| D-36 | V1 over a snapshot holding a root process whose `status` carries no `VmSwap` line: its row shows a zero rather than `n/a`, and the `(self)` row of the level is a number rather than an unknown. A process whose `status` cannot be read at all still shows `n/a` on the card |
 | Section 6 | Section 9 of this document |
 
 ## 14. Link to the requirements

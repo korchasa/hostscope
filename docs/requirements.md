@@ -503,6 +503,19 @@ cgroups, 366 processes, 19 containers. The tree there is comparable in
 node count to the target host, and the cost of a tick follows the number
 of cgroups and processes rather than the number of cores.
 
+A third host was used once, on 2026-08-29, to see the swap column on a
+machine that had actually filled its swap device: 48 cores, 1418
+processes, 7248 tasks, kernel 5.15, all 8 GB of swap in use with 794
+processes holding pages in it. Nothing was induced there and nothing was
+left behind; the figures come from reading alone. The `stat` pass the
+collector already makes costs 22.7 ms there, the same pass with `status`
+beside it 57.3 ms, so the swap column costs 34.6 ms a tick at that size
+against 4.5 ms at the 221 processes of the Kubernetes rig. The whole
+application with the column drawn cost 9.3 percent of one core at the
+one second interval and 5.7 MB - about a third of that tick is the swap
+reading. The own-usage requirement above is stated for a tree of about
+370 processes, and this one is four times that.
+
 Every figure is produced by `scripts/host-check.sh`, section
 `measurements`, which runs the application once under a scope of its own
 and reads the timings from its log and the CPU and memory from that
@@ -1441,6 +1454,20 @@ reached the card (D-34).
   the 90 files of that rig and the collector already walks the tree, but
   it names a cgroup rather than a process, so the process rows - which
   are most of the table (D-24) - would stay empty.
+
+D-36. A process that cannot be swapped counts as zero, not as unknown.
+DECIDED 2026-08-29 by the operator, replacing the clause of D-34 that
+made an absent `VmSwap` line an unknown.
+
+- A kernel thread has no address space, so nothing of it can be moved
+  out of RAM and its `status` carries no `VmSwap` line. The file was
+  read and the answer is zero; what stays unknown under D-13 is a
+  `status` that could not be read at all.
+- Reading the absent line as unknown poisoned every remainder above it.
+  Seen on a third host on 2026-08-29: `kthreadd` and its whole subtree
+  reported no swap, so the `(self)` row of the top level had an unknown
+  under it and said `n/a` about a machine with 8 GB in swap - and it
+  would have said it on every host, since every host has kernel threads.
 
 ## 10. Definition of done
 

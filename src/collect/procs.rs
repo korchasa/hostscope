@@ -107,7 +107,7 @@ pub fn read(
     // for `stat` over 221 processes against 7.2 ms for both. That is why it is
     // read only where its one useful line can be non-zero (D-35).
     let swap = if want_swap {
-        crate::collect::cgroup::read_file(&dir.join("status")).and_then(|t| vm_swap(&t))
+        crate::collect::cgroup::read_file(&dir.join("status")).map(|t| vm_swap(&t).unwrap_or(0.0))
     } else {
         None
     };
@@ -127,8 +127,10 @@ pub fn read(
 }
 
 /// The one line of `/proc/<pid>/status` this tool reads. A process without an
-/// address space - every kernel thread - has no such line, and the answer is
-/// then absent rather than zero (D-13).
+/// address space - every kernel thread - has no such line. That is a zero and
+/// not an unknown: nothing without an address space can be moved out of RAM,
+/// and the callers turn the absent line into a zero (D-36). What stays unknown
+/// is a `status` that could not be read at all.
 pub fn vm_swap(text: &str) -> Option<f64> {
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("VmSwap:") {
@@ -252,9 +254,10 @@ pub fn extras(proc_root: &Path, pid: i32) -> ProcExtras {
     }
 
     match fs::read_to_string(dir.join("status")) {
-        Ok(text) => e.swap = vm_swap(&text),
-        // A kernel thread has no address space and no `VmSwap` line at all, so
-        // an absent value is left absent rather than turned into a zero (D-13).
+        // The file read and the line absent is a kernel thread, which cannot be
+        // swapped at all: that is a zero (D-36). The file unreadable is an
+        // unknown, and an unknown is marked rather than zeroed (D-13).
+        Ok(text) => e.swap = Some(vm_swap(&text).unwrap_or(0.0)),
         Err(_) => e.restricted.push("swap"),
     }
 
