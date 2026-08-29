@@ -430,16 +430,17 @@ sudo systemd-run --scope --slice=hs -p CPUQuota=50% --unit=hs-steady -q \
   screen clear does not arrive on every frame: for `htop` it did not
   arrive once in two seconds.
 
-**The last full run, on the Kubernetes rig, 2026-08-15.** 37 checks
-passed, none failed, one skipped, in 113 seconds. The frame linter went
+**The last full run, on the Kubernetes rig, 2026-08-29.** 37 checks
+passed, none failed, one skipped, in 112 seconds. The frame linter went
 over 133 frames rather than the 29 the `tmux` walks used to produce -
 spelling a filter one key per frame yields a frame per letter, and each
 one is checked against every invariant for free. A 50 percent quota
-showed as 0.489 cores, the search found its node among 616, the worst
-collection on that full tree was 76 ms, the first frame arrived after
-16.0 ms, and the application spent 2.7 percent of one core and 1.0 MB on
-itself. `strace` showed one `execve`, no file opened for writing and no
-`/proc/<pid>/environ` opened at all.
+showed as 0.495 cores, the search found its node among 615, collection
+took 41.8 ms at the 95th percentile and a redraw 1.0 ms, the first frame
+arrived after 15.9 ms, the application sent 478 bytes per frame with no
+full screen clear in 20 seconds, and it spent 3.00 percent of one core
+and 1.2 MB on itself. `strace` showed one `execve`, no file opened for
+writing and no `/proc/<pid>/environ` opened at all.
 
 The skipped check is the container with a 120 character name: that rig
 runs containerd under microk8s and has no Docker to raise the state
