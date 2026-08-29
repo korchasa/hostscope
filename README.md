@@ -78,7 +78,8 @@ keys:
 The bar belongs to the sorted column: it is drawn beside the value the rows
 are ordered by, so the longest bar is always on the top row.
 
-CPU is shown in busy cores, and in no other unit.
+CPU is measured in busy cores: 0.5 means half a core is busy, 2.0 means two
+cores are.
 ```
 ## Building
 

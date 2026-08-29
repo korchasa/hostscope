@@ -151,7 +151,7 @@ fn interactive(
     enable_raw_mode().map_err(|e| format!("cannot switch the terminal to raw mode: {e}"))?;
     let mut out = std::io::stdout();
     crossterm::execute!(out, EnterAlternateScreen, crossterm::cursor::Hide)
-        .map_err(|e| format!("cannot take the screen: {e}"))?;
+        .map_err(|e| format!("cannot switch to the alternate screen: {e}"))?;
     let backend = CrosstermBackend::new(out);
     let mut terminal =
         Terminal::new(backend).map_err(|e| format!("cannot start the terminal: {e}"))?;

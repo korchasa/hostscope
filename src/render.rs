@@ -701,7 +701,7 @@ fn hint_for(row: &Row, docker_available: bool) -> String {
     let sel = &row.node;
     match sel.kind {
         Kind::Own => {
-            "the process's own usage: what it does itself, with the work of its children taken out"
+            "the process's own usage: what it does itself, not counting the work of its children"
                 .into()
         }
         Kind::Process => {
@@ -1074,7 +1074,7 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
                 &mut lines,
             );
             note(
-                "cpu and memory here are what the machine reports for itself, not a sum".into(),
+                "CPU and memory here are what the machine reports for itself, not a sum".into(),
                 &mut lines,
             );
         }
