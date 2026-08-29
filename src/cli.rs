@@ -25,37 +25,37 @@ usage: hostscope [options]
   -h, --help              this text
   -V, --version           version
 
-Dumps go to standard output: FR-10 forbids writing outside the settings file,
+Dumps go to standard output. FR-10 forbids writing outside the settings file,
 and a verification hook is no reason to make an exception.
 
-The tree is the process forest of the host: every row is a process and stands
-under the process that started it. What runs a process - a container, a
+The tree is the process forest of the host: every row is a process, and it
+stands under the process that started it. What runs a process - a container, a
 service, a login session - is read from its cgroup and shown on the row itself,
-in the OWNER column, where the filter reaches it.
+in the OWNER column. The filter reaches that column as well.
 
-A chain of processes where each one started only the next, and all of them
-belong to the same owner, is drawn as one row named for the whole chain: it
-said nothing a level at a time and cost a keystroke a level.
+A chain of processes where each one started only the next, all of them with
+the same owner, is drawn as one row named for the whole chain. Such a chain
+said nothing one level at a time, and cost a keystroke for every level.
 
-A row whose work is inside a container says so in parentheses after its own
-name: a runtime shim belongs to the runtime and its whole work is one level
-down. Where the row leads into several containers of one pod, it names the pod
-instead, by the first group of its identifier.
+A row whose work sits inside a container names that container in parentheses
+after its own name: a runtime shim belongs to the container runtime, and the
+work is one level below it. A row that leads into several containers of one pod
+names the pod instead, by the first group of the pod's identifier.
 
-keys: up and down move, PageUp and PageDown move by a screenful, Enter goes
-down and opens the card where there is nothing below, Backspace comes back up,
-i opens the card of any row, / filters by name, by command line and by owner,
-c m d n sort, v lays the level out as a flat list of its ends, a switches the
-measurement window between the average since start and the last interval, space
-freezes the screen, - and + move the refresh interval between a pause, 1, 2, 3,
-5, 10, 30 and 60 seconds, q quits. The right arrow also descends, and in the
-list view it puts a row among its neighbours. Escape undoes the narrowing
-nearest at hand: the card, then the filter, then the level.
+keys: up and down move, and PageUp and PageDown move by a screenful. Enter
+goes down, and opens the card where there is nothing below. Backspace comes
+back up. i opens the card of any row. / filters by name, by command line and by
+owner. c m d n sort. v lays the level out as a flat list of its ends. a
+switches the measurement window between the average since start and the last
+interval. space freezes the screen. - and + move the refresh interval between a
+pause, 1, 2, 3, 5, 10, 30 and 60 seconds. q quits. The right arrow also
+descends, and in the list view it puts a row among its neighbours. Escape undoes
+the narrowing nearest at hand: the card, then the filter, then the level.
 
-The bar beside a column belongs to the sorting: it is drawn next to the value
-the rows are ordered by, so the longest bar is always the top row.
+The bar belongs to the sorted column: it is drawn beside the value the rows
+are ordered by, so the longest bar is always on the top row.
 
-CPU is written in busy cores and in nothing else.
+CPU is shown in busy cores, and in no other unit.
 ";
 
 #[derive(Clone, Debug)]
