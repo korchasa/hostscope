@@ -240,6 +240,50 @@ fn is_hex_id(s: &str, least: usize) -> bool {
     s.len() >= least && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// The pod a cgroup path belongs to, when it belongs to one (D-31).
+///
+/// Both cgroup drivers write the pod into the path, in their own shape: the
+/// cgroupfs driver as a directory of its own, `/kubepods/burstable/pod<uuid>/`,
+/// and the systemd driver as one flattened name,
+/// `kubepods-burstable-pod<uuid>.slice`, with the dashes of the UUID written as
+/// underscores because a dash is what systemd builds the name out of.
+///
+/// The shape of the UUID is what decides, not the position of the component: a
+/// directory called `pod` followed by anything else is not a pod, and reading
+/// one would put a name on rows that have nothing to do with Kubernetes.
+pub fn pod_id(rel: &str) -> Option<String> {
+    for part in rel.split('/').filter(|s| !s.is_empty()) {
+        let stem = part.strip_suffix(".slice").unwrap_or(part);
+        let rest = stem
+            .strip_prefix("pod")
+            .or_else(|| stem.split_once("-pod").map(|(_, r)| r));
+        if let Some(rest) = rest {
+            let id = rest.replace('_', "-");
+            if is_pod_uuid(&id) {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
+fn is_pod_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.chars().enumerate().all(|(i, c)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                c == '-'
+            } else {
+                c.is_ascii_hexdigit()
+            }
+        })
+}
+
+/// The first group of a pod's UUID, which is what the row shows (D-31). It is
+/// not a name, and the decision says why there is none to show on such a host.
+pub fn short_pod(id: &str) -> String {
+    id.split('-').next().unwrap_or(id).to_string()
+}
+
 /// The short form an engineer sees when the daemon cannot be reached (D-13).
 pub fn short_id(id: &str) -> String {
     id.chars().take(12).collect()
@@ -254,6 +298,27 @@ mod tests {
         let text = "read_bytes 105627599590933\nwrite_bytes 1\n";
         assert_eq!(field(text, "read_bytes"), Some(105627599590933.0));
         assert_eq!(field(text, "nope"), None);
+    }
+
+    /// Both cgroup drivers carry the pod, and neither writes it the same way
+    /// (D-31). A directory that merely begins with `pod` is not one.
+    #[test]
+    fn the_pod_is_read_from_either_driver_layout() {
+        let uuid = "49ccade5-8a0b-4389-99ae-0c74a2533472";
+        assert_eq!(
+            pod_id(&format!("/kubepods/burstable/pod{uuid}/460e0f0eceb5")),
+            Some(uuid.to_string())
+        );
+        assert_eq!(
+            pod_id(&format!(
+                "/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod{}.slice/cri-containerd-460e.scope",
+                uuid.replace('-', "_")
+            )),
+            Some(uuid.to_string())
+        );
+        assert_eq!(pod_id("/system.slice/podman.service"), None);
+        assert_eq!(pod_id("/kubepods/besteffort"), None);
+        assert_eq!(short_pod(uuid), "49ccade5");
     }
 
     /// The three layouts the captured environments showed, side by side (D-23).

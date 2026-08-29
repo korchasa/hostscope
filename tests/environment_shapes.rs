@@ -275,6 +275,35 @@ fn a_row_leading_into_one_container_names_it() {
     );
 }
 
+/// D-31: on a Kubernetes node a shim carries two children - the pod's `pause`
+/// sandbox and the workload container - so D-30 named nothing and the level came
+/// back as rows all reading `containerd-shim`. What the two have in common is
+/// the pod, so the row says the pod. Two containers of two different pods still
+/// name nothing: one row cannot name two.
+#[test]
+fn a_row_leading_into_one_pod_names_the_pod() {
+    let f = Fixture::new("pod-sandbox");
+    f.shape_pod_sandbox();
+
+    let level = table(&walk_at(&f, &under("systemd"), "160x30"));
+    let shims: Vec<String> = level
+        .into_iter()
+        .filter(|l| l.contains("containerd-shim"))
+        .collect();
+    assert_eq!(shims.len(), 2, "{shims:?}");
+
+    let named: Vec<&String> = shims.iter().filter(|l| l.contains('(')).collect();
+    assert_eq!(
+        named.len(),
+        1,
+        "only the shim of one pod is named: {shims:?}"
+    );
+    assert!(
+        named[0].contains("(pod 49ccade5)"),
+        "the row names the pod its containers share: {named:?}"
+    );
+}
+
 /// The name in parentheses is part of what the row shows, so the filter reaches
 /// it and the row that leads into a container is found by that container's name
 /// (D-30, D-29). Without this the reader types the name, the row says it, and

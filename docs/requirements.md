@@ -1306,6 +1306,35 @@ twenty rows in a row read `containerd-shim`.
   the container - would make two rows of different processes read alike,
   which is the confusion the row's own name is there to prevent.
 
+D-31. On a Kubernetes node the row names the pod. DECIDED 2026-08-29 by
+the operator, after the same level on the Kubernetes rig came back with
+six rows all reading `containerd-shim`.
+
+- D-30 left this case unnamed on purpose: a row with two containers
+  under it named neither, because one row cannot name two. Measured on
+  the Kubernetes rig the same day, that is every shim on the host - all 6
+  had exactly two children, the pod's `pause` sandbox and the workload
+  container, and all 6 had both children inside one pod.
+- What the two children have in common is the pod, so that is what the
+  row says: `containerd-shim (pod 49ccade5)`. The rule applies where the
+  children are containers and all of them sit in the same pod; where they
+  sit in different pods the row still names nothing, which is what D-30
+  decided and what has not changed.
+- The name is the first group of the pod's UUID, read out of the cgroup
+  path. It is not a name a person recognises, and it was chosen knowing
+  that: on this host no readable name exists at all. Every container
+  owner there is a 12-character identifier, because microk8s runs
+  containerd and the enrichment of FR-3 speaks only to a Docker socket.
+  What the UUID buys is that six identical rows become six different
+  ones, and that `kubectl` finds the pod by it.
+- Where a row has exactly one container under it, D-30 still decides and
+  the row names the container. That rule is the more precise of the two:
+  it says which container, and the pod rule only says which pod.
+- The pod is read from the cgroup path, which both cgroup drivers write
+  in a form that carries it: `/kubepods/burstable/pod<uuid>/<container>`
+  from the cgroupfs driver, and `kubepods-burstable-pod<uuid>.slice` with
+  underscores for dashes from the systemd one.
+
 ## 10. Definition of done
 
 The work is finished when:
@@ -1385,6 +1414,9 @@ worth carrying next to the requirements:
   parentheses after its own name and keeps its own owner. The shim that
   starts a container is a real process of the runtime; what the reader is
   looking for is what it leads to (D-30).
+- A row whose children are several containers of one pod names the pod
+  there instead, by the first group of its UUID (D-31). Where they belong
+  to different pods the row names nothing: one row cannot name two.
 - A non-zero value draws at least one tick of the bar. An empty cell
   reads as zero, and 0 and 0.004 cores are different things.
 - A name longer than its column is truncated with an ellipsis, the path

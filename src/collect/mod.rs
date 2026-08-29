@@ -494,17 +494,43 @@ pub fn unix_now() -> f64 {
 /// half a name is worse than none. An owner with no name of its own gives
 /// nothing to put in the parentheses.
 fn leads_into(node: &Node) -> Option<String> {
-    let [child] = node.children.as_slice() else {
-        return None;
-    };
-    let owner = child.detail.owner.as_ref()?;
-    if owner.kind != OwnerKind::Container
-        || owner.name.is_empty()
-        || node.detail.owner.as_ref() == Some(owner)
-    {
+    if let [child] = node.children.as_slice() {
+        if let Some(owner) = child.detail.owner.as_ref() {
+            if owner.kind == OwnerKind::Container
+                && !owner.name.is_empty()
+                && node.detail.owner.as_ref() != Some(owner)
+            {
+                return Some(owner.name.clone());
+            }
+        }
         return None;
     }
-    Some(owner.name.clone())
+    pod_below(node).map(|id| format!("pod {}", cgroup::short_pod(&id)))
+}
+
+/// The pod several containers under one row share (D-31). On a Kubernetes node
+/// a shim carries two children - the pod's `pause` sandbox and the workload
+/// container - so the rule above names nothing, and what the two have in common
+/// is the pod. Every child must be a container and every one of them in the
+/// same pod: children of two pods leave a row that would have to name two, and
+/// a single non-container child means the row leads somewhere else as well.
+fn pod_below(node: &Node) -> Option<String> {
+    if node.children.len() < 2 {
+        return None;
+    }
+    let mut pod: Option<String> = None;
+    for child in &node.children {
+        let owner = child.detail.owner.as_ref()?;
+        if owner.kind != OwnerKind::Container {
+            return None;
+        }
+        let here = cgroup::pod_id(child.detail.cgroup_path.as_deref()?)?;
+        match &pod {
+            Some(seen) if *seen != here => return None,
+            _ => pod = Some(here),
+        }
+    }
+    pod
 }
 
 fn glue_single_child(node: &mut Node) {

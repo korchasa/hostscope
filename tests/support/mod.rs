@@ -177,6 +177,82 @@ impl Fixture {
         self.process(402, 1, "systemd", 20, 300, "/lib/systemd/systemd --user");
     }
 
+    /// A Kubernetes node as microk8s lays it out, which is where D-30 named
+    /// nothing: every shim carries two children, the pod's `pause` sandbox and
+    /// the workload container, and both sit in one pod (D-31). The third shim
+    /// here holds two containers of two different pods, which is the case that
+    /// still has nothing to name.
+    pub fn shape_pod_sandbox(&self) {
+        self.host(1_000_000, 900_000, 4);
+        self.cgroup("", &[]);
+        self.cgroup("init.scope", &[1]);
+        self.cgroup("system.slice", &[]);
+        self.cgroup(
+            "system.slice/snap.microk8s.daemon-containerd.service",
+            &[101, 102],
+        );
+        self.cgroup("kubepods", &[]);
+        self.cgroup("kubepods/burstable", &[]);
+        let pod_a = "kubepods/burstable/pod49ccade5-8a0b-4389-99ae-0c74a2533472";
+        self.cgroup(pod_a, &[]);
+        self.cgroup(
+            &format!("{pod_a}/9f9149fcb4804719f61ed48794583a2eeb6735da282cdee85652fb76bdd7e09b"),
+            &[201],
+        );
+        self.cgroup(
+            &format!("{pod_a}/460e0f0eceb53803fb111b7d7df22fb036ad4ac357b825cd601c1c131cd83145"),
+            &[202],
+        );
+        self.cgroup("kubepods/besteffort", &[]);
+        let pod_b = "kubepods/besteffort/pod41810b2b-14eb-47f1-b216-ace571bb8132";
+        let pod_c = "kubepods/besteffort/podad57a2a9-a796-4079-a42e-0e8fbefdd054";
+        self.cgroup(pod_b, &[]);
+        self.cgroup(
+            &format!("{pod_b}/0ab5a48ea28a1a80f064701f33d0c4dd0635aa26e25a421444f63c5256bbce9c"),
+            &[301],
+        );
+        self.cgroup(pod_c, &[]);
+        self.cgroup(
+            &format!("{pod_c}/08732113efbe5aa5e6031eba814a5657151d7b685dffb4029f76d5a0fc1d390f"),
+            &[302],
+        );
+        self.process(1, 0, "systemd", 20, 100, "/sbin/init");
+        self.process(
+            101,
+            1,
+            "containerd-shim",
+            12,
+            300,
+            "containerd-shim-runc-v2",
+        );
+        self.process(
+            102,
+            1,
+            "containerd-shim",
+            12,
+            300,
+            "containerd-shim-runc-v2",
+        );
+        self.process(201, 101, "pause", 4, 200, "/pause");
+        self.process(
+            202,
+            101,
+            "coredns",
+            40,
+            900,
+            "/coredns -conf /etc/coredns/Corefile",
+        );
+        self.process(301, 102, "pause", 4, 200, "/pause");
+        self.process(
+            302,
+            102,
+            "hostpath-provis",
+            30,
+            700,
+            "/hostpath-provisioner",
+        );
+    }
+
     /// The boundary D-30 is about: a runtime shim of `containerd.service` with
     /// its whole work inside a container, which is where the process forest
     /// stops gluing because the owner changes. `system.slice` also holds a shim
