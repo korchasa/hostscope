@@ -39,7 +39,9 @@ pub struct ProcExtras {
     pub files: Option<usize>,
     pub sockets: Option<usize>,
     pub conns: Vec<String>,
-    pub limits: Option<String>,
+    /// The limits as named values, one per row of the card: a line that
+    /// carried both made the reader look for a word inside it (D-32).
+    pub limits: Vec<(&'static str, String)>,
     pub pss: Option<f64>,
     pub restricted: Vec<&'static str>,
 }
@@ -199,16 +201,12 @@ pub fn extras(proc_root: &Path, pid: i32) -> ProcExtras {
     }
 
     if let Ok(text) = fs::read_to_string(dir.join("limits")) {
-        let mut parts = Vec::new();
         for line in text.lines() {
             if let Some(v) = limit_line(line, "Max open files") {
-                parts.push(format!("nofile {v}"));
+                e.limits.push(("nofile", v));
             } else if let Some(v) = limit_line(line, "Max processes") {
-                parts.push(format!("nproc {v}"));
+                e.limits.push(("nproc", v));
             }
-        }
-        if !parts.is_empty() {
-            e.limits = Some(parts.join("   "));
         }
     }
 

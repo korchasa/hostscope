@@ -57,6 +57,34 @@ impl Fixture {
         );
     }
 
+    /// What only the card of a selected row reads: the open files of the
+    /// process, its two limits and its PSS. `fd` is a directory of links, and a
+    /// socket is a link to `socket:[<inode>]` - which is how the counter tells
+    /// a socket from a file, so the fixture writes them the same way.
+    pub fn process_extras(&self, pid: i32, files: usize, sockets: usize, pss_kb: u64) {
+        let dir = self.proc_root().join(pid.to_string());
+        let fd = dir.join("fd");
+        fs::create_dir_all(&fd).unwrap();
+        for i in 0..files {
+            std::os::unix::fs::symlink(format!("/var/log/{i}.log"), fd.join(i.to_string()))
+                .unwrap();
+        }
+        for i in 0..sockets {
+            std::os::unix::fs::symlink(
+                format!("socket:[{}]", 40000 + i),
+                fd.join((files + i).to_string()),
+            )
+            .unwrap();
+        }
+        write_file(
+            &dir.join("limits"),
+            "Limit                     Soft Limit           Hard Limit           Units\n\
+             Max processes             62987                62987                processes\n\
+             Max open files            524287               524288               files\n",
+        );
+        write_file(&dir.join("smaps_rollup"), &format!("Pss:  {pss_kb} kB\n"));
+    }
+
     /// One process, in the shape `/proc/<pid>/stat` has on a live host.
     pub fn process(
         &self,

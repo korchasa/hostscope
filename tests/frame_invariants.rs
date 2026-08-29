@@ -350,6 +350,81 @@ fn the_card_opens_on_every_kind_of_row_and_is_not_a_level() {
     assert!(text.contains("pid "), "the process card is missing");
 }
 
+/// D-32: the card is read down a column. Both modes stand under one heading in
+/// fixed columns, and every figure has a label of its own on the left edge -
+/// the average of a quantity is found by looking, not by reading each line to
+/// see where the word `avg` fell this time.
+#[test]
+fn the_card_puts_every_figure_under_a_label_and_a_column() {
+    let f = Fixture::new("card-columns");
+    build(&f);
+    f.process_extras(101, 20, 2, 4400);
+
+    let frames = scenario(&f, "v / s s h d Enter i", "110x36");
+    check_all(&frames, 110);
+    let card = frames.last().unwrap().clone();
+    let line = |label: &str| -> String {
+        card.iter()
+            .find(|l| {
+                l.starts_with(&format!("\u{2502}  {label} "))
+                    || l.trim_end() == format!("\u{2502}  {label}")
+            })
+            .unwrap_or_else(|| panic!("no line labelled {label} in:\n{}", card.join("\n")))
+            .clone()
+    };
+
+    // The heading is written once, and it is what fixes the two columns.
+    let head = card
+        .iter()
+        .find(|l| {
+            let text = l.trim_start_matches('\u{2502}').trim_start();
+            text.starts_with("now") && text.contains("avg over")
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "the figure columns have no heading in:\n{}",
+                card.join("\n")
+            )
+        })
+        .clone();
+    // In characters, not in bytes: the frame border is three bytes wide.
+    let head_chars: Vec<char> = head.chars().collect();
+    let now_at = char_find(&head_chars, "now", 0).unwrap();
+    let avg_at = char_find(&head_chars, "avg over", 0).unwrap();
+
+    // Every figure starts where its column starts, on all four rows.
+    for label in ["cpu", "memory RSS", "disk r/w", "net \u{2193}/\u{2191}"] {
+        let row: Vec<char> = line(label).chars().collect();
+        for (name, at) in [("now", now_at), ("avg", avg_at)] {
+            assert_eq!(
+                row[at - 1],
+                ' ',
+                "the {name} column of {label} does not start where the heading says"
+            );
+            assert_ne!(
+                row[at], ' ',
+                "the {name} column of {label} is empty where the heading says it is"
+            );
+        }
+    }
+
+    // A fact with a label of its own is found by running down the left edge.
+    for label in [
+        "own virtual",
+        "own PSS",
+        "files",
+        "sockets",
+        "nofile",
+        "nproc",
+    ] {
+        line(label);
+    }
+    assert!(
+        !line("files").contains("sockets"),
+        "the socket count is still inside the value of another label"
+    );
+}
+
 #[test]
 fn the_list_view_holds_the_invariants_and_reaches_a_process_from_the_root() {
     let f = Fixture::new("list");

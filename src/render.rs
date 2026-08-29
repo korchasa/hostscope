@@ -987,6 +987,21 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
     let note = |t: String, lines: &mut Vec<Line<'static>>| {
         lines.push(clip(vec![Span::styled(format!("  {t}"), dim())], u));
     };
+    // A figure stands in a column of its own, and the column is the same on
+    // every row: the reader runs the eye down it instead of searching each
+    // line for the word `avg` (D-32). A value wider than its column pushes the
+    // next one rather than being cut - a figure is never shortened in silence.
+    let fig = |k: &str, now: String, avg: String, tail: &str, lines: &mut Vec<Line<'static>>| {
+        lines.push(clip(
+            vec![
+                Span::styled(format!("  {}", pad(k, 16)), dim()),
+                Span::styled(pad(&now, 16), plain()),
+                Span::styled(pad(&avg, 16), plain()),
+                Span::styled(tail.to_string(), dim()),
+            ],
+            u,
+        ));
+    };
 
     match node.kind {
         Kind::Process => {
@@ -1112,93 +1127,99 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
 
     lines.push(clip(vec![], u));
     // Both modes stand side by side rather than in turn: the gap between them
-    // is the diagnosis (section 11).
-    kv(
+    // is the diagnosis (section 11). The heading names them once, above the
+    // columns they stand in, instead of a word beside every figure (D-32).
+    lines.push(clip(
+        vec![Span::styled(
+            format!("  {}{}avg over {window}", pad("", 16), pad("now", 16)),
+            dim(),
+        )],
+        u,
+    ));
+    fig(
         "cpu",
-        format!(
-            "{} cores now   {} avg over {}",
-            cores_opt(node.instant.cpu),
-            cores_opt(node.avg.cpu),
-            window
-        ),
+        format!("{} cores", cores_opt(node.instant.cpu)),
+        format!("{} cores", cores_opt(node.avg.cpu)),
+        "",
         &mut lines,
     );
-    let mem_line = if node.kind == Kind::Process {
-        // RSS is the whole subtree (FR-5), while the virtual size and the PSS
-        // come from this process alone. Two different scopes on one line have
-        // to say so, or the reader compares numbers that do not compare.
-        let subtree = if node.children.is_empty() {
-            ""
+    // RSS is the whole subtree (FR-5), while the virtual size and the PSS come
+    // from this process alone. Each is a row with the scope in its label: on
+    // one line the reader compared numbers that do not compare (D-32).
+    fig(
+        if node.kind == Kind::Process {
+            "memory RSS"
         } else {
-            " (with children)"
-        };
-        let pss = app
-            .card_extras
-            .as_ref()
-            .and_then(|e| e.pss)
-            .map(|p| format!(", PSS {}", mem_str(p)))
-            .unwrap_or_default();
-        format!(
-            "RSS {} now   {} avg{}   own: virtual {}{}",
-            or_na(node.instant.mem, mem_str),
-            or_na(node.avg.mem, mem_str),
-            subtree,
-            or_na(node.detail.vsz, mem_str),
-            pss
-        )
-    } else {
-        format!(
-            "memory.current {} now   {} avg",
-            or_na(node.instant.mem, mem_str),
-            or_na(node.avg.mem, mem_str)
-        )
-    };
-    kv("memory", mem_line, &mut lines);
-    kv(
-        "disk",
-        format!(
-            "{} now   {} avg{}",
-            per_second(pair_rate_opt(node.instant.rd, node.instant.wr)),
-            per_second(pair_rate_opt(node.avg.rd, node.avg.wr)),
-            node.detail
-                .io_total
-                .map(|(r, w)| format!("   {} / {} since start", bytes_str(r), bytes_str(w)))
-                .unwrap_or_default()
-        ),
+            "memory.current"
+        },
+        or_na(node.instant.mem, mem_str),
+        or_na(node.avg.mem, mem_str),
+        if node.kind == Kind::Process && !node.children.is_empty() {
+            "with children"
+        } else {
+            ""
+        },
         &mut lines,
     );
-    kv(
-        "net",
-        format!(
-            "{} now   {} avg   {}",
-            per_second(pair_rate_opt(node.instant.rx, node.instant.tx)),
-            per_second(pair_rate_opt(node.avg.rx, node.avg.tx)),
-            if node.detail.own_netns {
-                "own netns"
-            } else if app.view().ebpf {
-                "host netns, split by eBPF"
-            } else if node.kind == Kind::Process {
-                "attributed to the namespace, not to the process"
-            } else {
-                "host netns, not attributable without eBPF"
-            }
-        ),
+    if node.kind == Kind::Process {
+        // The label carries the scope, so the line beside it does not repeat it:
+        // `own` is what the (self) row means everywhere else in the interface.
+        fig(
+            "own virtual",
+            or_na(node.detail.vsz, mem_str),
+            String::new(),
+            "",
+            &mut lines,
+        );
+        if let Some(pss) = app.card_extras.as_ref().and_then(|e| e.pss) {
+            fig(
+                "own PSS",
+                mem_str(pss),
+                String::new(),
+                "shared pages divided between those that map them",
+                &mut lines,
+            );
+        }
+    }
+    fig(
+        "disk r/w",
+        per_second(pair_rate_opt(node.instant.rd, node.instant.wr)),
+        per_second(pair_rate_opt(node.avg.rd, node.avg.wr)),
+        &node
+            .detail
+            .io_total
+            .map(|(r, w)| format!("{} / {} since start", bytes_str(r), bytes_str(w)))
+            .unwrap_or_default(),
+        &mut lines,
+    );
+    fig(
+        "net \u{2193}/\u{2191}",
+        per_second(pair_rate_opt(node.instant.rx, node.instant.tx)),
+        per_second(pair_rate_opt(node.avg.rx, node.avg.tx)),
+        if node.detail.own_netns {
+            "own netns"
+        } else if app.view().ebpf {
+            "host netns, split by eBPF"
+        } else if node.kind == Kind::Process {
+            "attributed to the namespace, not to the process"
+        } else {
+            "host netns, not attributable without eBPF"
+        },
         &mut lines,
     );
 
     if node.kind == Kind::Process {
         if let Some(extras) = &app.card_extras {
             lines.push(clip(vec![], u));
-            kv(
-                "files",
-                match (extras.files, extras.sockets) {
-                    (Some(f), Some(s)) => format!("{f}   sockets {s}"),
-                    _ => "n/a without root".to_string(),
-                },
-                &mut lines,
-            );
-            if let Some(limits) = &extras.limits {
-                kv("limits", limits.clone(), &mut lines);
+            match (extras.files, extras.sockets) {
+                (Some(f), Some(s)) => {
+                    kv("files", f.to_string(), &mut lines);
+                    kv("sockets", s.to_string(), &mut lines);
+                }
+                _ => kv("files", "n/a without root".to_string(), &mut lines),
+            }
+            for (name, value) in &extras.limits {
+                kv(name, value.clone(), &mut lines);
             }
             kv(
                 "connections",

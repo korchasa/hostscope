@@ -1336,6 +1336,34 @@ six rows all reading `containerd-shim`.
   from the cgroupfs driver, and `kubepods-burstable-pod<uuid>.slice` with
   underscores for dashes from the systemd one.
 
+D-32. The card is read down a column, not along a line. DECIDED
+2026-08-29 by the operator, after looking for the average of one quantity
+on a card and having to read every line to find it.
+
+- The four rows of figures wrote both modes as prose - `0.000 cores now
+  0.003 avg over 3s` - so the word `avg` began at a different cell on
+  every row, because the value before it has a different width on every
+  row. Comparing four averages meant reading four lines instead of
+  running the eye down one column.
+- The modes now stand in fixed columns with one heading above them, `now`
+  and `avg over <window>`, written once instead of eight times. What is
+  left of the line is a third column that says something about the row -
+  the totals since start, the network namespace - and never a figure that
+  belongs in the first two.
+- Memory was four figures on one line, and two of them - the virtual size
+  and the PSS - belong to the process alone while the RSS carries the
+  whole subtree. Each is a row of its own now, labelled `own virtual` and
+  `own PSS`, so the scope is in the label rather than in a note halfway
+  along the line.
+- A fact gets a label of its own. `sockets` used to sit inside the value
+  of `files`, and the two limits inside the value of `limits`, so the
+  reader searched for a word inside a line while everything else was
+  found by running down the left edge. One way of reading a card is
+  enough.
+- The card grows by about five lines. It already says how many lines it
+  hid when it does not fit (D-25), so a short terminal loses the tail
+  rather than losing it in silence.
+
 ## 10. Definition of done
 
 The work is finished when:
@@ -1430,9 +1458,10 @@ worth carrying next to the requirements:
   line is truncated from the left. Columns never merge, whatever the
   name.
 - The card of any row carries CPU, memory, disk and network in both
-  modes at once, side by side. The gap between instant and average is
-  the diagnosis: a spike shows as a divergence, a steady load as a
-  match.
+  modes at once, in two fixed columns under one heading. The gap between
+  instant and average is the diagnosis: a spike shows as a divergence, a
+  steady load as a match. Every figure has a label of its own on the left
+  edge, and no line holds a second labelled value (D-32).
 - The card prints only what this node actually has. The host row has no
   command line and no container, and filling the screen with empty
   labels is not allowed.
