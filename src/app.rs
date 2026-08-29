@@ -66,7 +66,7 @@ pub fn interval_label(ms: u64) -> String {
         "paused".to_string()
     } else if ms < 1000 {
         format!("{ms}ms")
-    } else if ms % 1000 == 0 {
+    } else if ms.is_multiple_of(1000) {
         format!("{}s", ms / 1000)
     } else {
         format!("{:.1}s", ms as f64 / 1000.0)

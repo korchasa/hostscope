@@ -104,7 +104,7 @@ rustup target add x86_64-unknown-linux-musl
 cargo build --release --target x86_64-unknown-linux-musl
 ```
 
-The result is a 925 KB static binary.
+The result is a 968 KB static binary.
 
 ## Checking it
 

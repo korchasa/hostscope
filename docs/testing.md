@@ -140,9 +140,9 @@ The build happens on the Mac and cross-compiles to the host: the target
 `x86_64-unknown-linux-musl` is installed there and `.cargo/config.toml`
 links it with `rust-lld` and `link-self-contained`, so no musl toolchain
 and no Docker are needed. Measured on 2026-08-15: a release build of the
-target takes 49 seconds from scratch and 6.5 seconds after an edit, and
-produces a 918 KB static binary which needs nothing installed on the
-host.
+target takes 49 seconds from scratch and 6.5 seconds after an edit. The
+binary it produces needs nothing installed on the host; it was 918 KB
+then and is 968 KB after the dependency update of 2026-08-29.
 
 Building, shipping and running are one command, `make live`, and not
 three. The three were `ssh mkdir`, `scp` and `ssh bash host-check.sh`,
@@ -443,13 +443,14 @@ sudo systemd-run --scope --slice=hs -p CPUQuota=50% --unit=hs-steady -q \
 passed, none failed, one skipped, in 113 seconds. The frame linter went
 over 133 frames rather than the 29 the `tmux` walks used to produce -
 spelling a filter one key per frame yields a frame per letter, and each
-one is checked against every invariant for free. A 50 percent quota
-showed as 0.496 cores, the search found its node among 617, collection
-took 40.6 ms at the 95th percentile and a redraw 0.8 ms, the first frame
-arrived after 16.0 ms, the application sent 1313 bytes per frame with
-five full screen clears in 20 seconds - the repaint of D-38, which was
-not in the binary of the run before this one - and it spent 1.97 percent
-of one core and 1.2 MB on itself. That rig has swapped nothing, so it draws no swap
+one is checked against every invariant for free. It is the first run on
+`ratatui` 0.30. A 50 percent quota showed as 0.502 cores, the search
+found its node among 619, collection took 41.3 ms at the 95th percentile
+and a redraw 1.0 ms, the first frame arrived after 15.7 ms, the
+application sent 1330 bytes per frame with five full screen clears in 20
+seconds - the repaint of D-38 - and it spent 2.58 percent of one core and
+1.4 MB on itself. Nothing moved beyond the spread between two runs of the
+same binary. That rig has swapped nothing, so it draws no swap
 column and pays nothing for it (D-35): the figure is the same as before
 the column existed. `strace` showed one `execve`, no file opened for
 writing and no `/proc/<pid>/environ` opened at all.

@@ -2,12 +2,12 @@
 name = "hostscope"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.88"
 build = "build.rs"
 
 [dependencies]
-ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
-crossterm = "0.28"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
 # Already in the tree - ratatui draws with it. Naming it here costs no bytes and
 # replaces a hand-written table of wide ranges that was missing whole blocks of
 # emoji (D-18).
