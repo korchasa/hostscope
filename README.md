@@ -20,36 +20,56 @@ marks unavailable rather than showing as a zero.
 
 ![A level of a Kubernetes node in hostscope](docs/screenshot.png)
 
-- The tree is the process forest. Every row is a process and stands
-  under the process that started it.
-- Every row carries CPU in busy cores, memory, tasks, disk read and
-  write, and network down and up - for the process and everything under
-  it.
-- `OWNER` names what runs the process: a container, a service, a login
-  session. It reads Docker with either cgroup driver, containerd under
-  Kubernetes, and podman.
-- A row that leads into a container names it in parentheses, and one
-  that leads into a pod of several names the pod.
-- A chain of processes where each started only the next is drawn as one
-  row named for the whole chain. A change of owner ends the chain.
-- `>` marks a row with something under it. `Enter` goes deeper,
-  `Backspace` comes back, `Esc` undoes the nearest narrowing.
-- `i` opens the card of a row: the command line, the pid, the chain, the
-  container image, and both measurement modes side by side.
-- `c m d n` sort. The bar stands beside the sorted column and moves with
-  it.
-- `/` filters by name, command line and owner. The match is marked
-  wherever it is drawn, and the path line says what was typed and how
-  many rows are left.
-- `v` lays the level out as a flat list of its ends, which finds the
-  process eating the host without knowing which branch it sits on.
-- `a` switches between the average since start and the last interval;
-  `-` and `+` move the interval between a pause and 60 seconds, and
-  space reaches the pause in one key.
-- What cannot be read is marked unavailable, never replaced with a zero.
-  Names are shown in their own script, and columns are measured in
-  cells.
+```
+hostscope - an interactive viewer of the current host state
 
+usage: hostscope [options]
+
+  --tick MS               the interval to start at, in milliseconds
+                          (default 3000; - and + move it while running)
+  --cgroup-root DIR       read a captured snapshot instead of /sys/fs/cgroup
+  --proc-root DIR         read a captured snapshot instead of /proc
+  --docker-socket PATH    the docker socket, or 'none' to disable enrichment
+  --dump-model json       print the tree model as numbers to stdout and exit
+  --dump-frame N          render N frames as text to stdout and exit
+  --keys "Right a Esc"    run a key program and stop
+  --size WxH              frame size for --dump-frame (default 100x30)
+  --log FILE              write the log to FILE; never to the terminal
+  -h, --help              this text
+  -V, --version           version
+
+Dumps go to standard output: FR-10 forbids writing outside the settings file,
+and a verification hook is no reason to make an exception.
+
+The tree is the process forest of the host: every row is a process and stands
+under the process that started it. What runs a process - a container, a
+service, a login session - is read from its cgroup and shown on the row itself,
+in the OWNER column, where the filter reaches it.
+
+A chain of processes where each one started only the next, and all of them
+belong to the same owner, is drawn as one row named for the whole chain: it
+said nothing a level at a time and cost a keystroke a level.
+
+A row whose work is inside a container says so in parentheses after its own
+name: a runtime shim belongs to the runtime and its whole work is one level
+down. Where the row leads into several containers of one pod, it names the pod
+instead, by the first group of its identifier.
+
+keys: up and down move, PageUp and PageDown move by a screenful, Enter goes
+down and opens the card where there is nothing below, Backspace comes back up,
+i opens the card of any row, / filters by name, by command line and by owner,
+c m d n sort, v lays the level out as a flat list of its ends, a switches the
+measurement window between the average since start and the last interval, space
+freezes the screen, - and + move the refresh interval between a pause, 1, 2, 3,
+5, 10, 30 and 60 seconds, q quits. The right arrow also descends, and in the
+list view it puts a row among its neighbours. Escape undoes the narrowing
+nearest at hand: the card, then the filter, then the level.
+
+The bar beside a column belongs to the sorting: it is drawn next to the value
+the rows are ordered by, so the longest bar is always the top row.
+
+CPU is written in busy cores and in nothing else.
+```
 ## Building
 
 Rust 1.96, no dependencies beyond `ratatui`, `crossterm` and
@@ -62,16 +82,6 @@ cargo build --release --target x86_64-unknown-linux-musl
 ```
 
 The result is a 925 KB static binary.
-
-## Options
-
-`hostscope --help` prints them all. Two of them matter before the first
-run: `--tick MS` sets the interval the application opens at, which `-`
-and `+` then move, and `--log FILE` writes what each tick and each frame
-cost. The rest drive it without a terminal - a captured snapshot instead
-of the live host, a key program instead of a person, the model or the
-frame printed instead of drawn - and those are what the tests and the
-checks use.
 
 ## Checking it
 

@@ -24,7 +24,7 @@ TARGET := x86_64-unknown-linux-musl
 BIN    := target/$(TARGET)/release/hostscope
 LOGDIR := target/live
 
-.PHONY: help fast fmt lint test build live live-quick live-bg live-log ship clean
+.PHONY: help fast fmt lint test build live live-quick live-bg live-log ship readme clean
 
 help:
 	@echo "make fast        fmt, clippy and the tests           (~15 s)"
@@ -33,6 +33,7 @@ help:
 	@echo "make live-bg     the same as live, detached          returns at once"
 	@echo "make live-log    the summary of the last live run"
 	@echo "make all         fast then live"
+	@echo "make readme      copy the help text into README.md"
 	@echo
 	@echo "HOST=$(HOST)  DIR=$(DIR)   (set HOST= on the command line or in local.mk)"
 	@echo "one section:  make live SECTIONS='oracle security'"
@@ -59,6 +60,13 @@ test:
 
 build:
 	cargo build --release --target $(TARGET)
+
+# The README describes the application with the application's own words, so the
+# help text lives in one place and is copied into it. `tests/documents.rs` is
+# what notices when this has not been run.
+readme:
+	@cargo build --quiet
+	@scripts/readme-help.py target/debug/hostscope
 
 ship: build
 	@HS_HOST=$(HOST) HS_DIR=$(DIR) scripts/live-check.sh --ship-only

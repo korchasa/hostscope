@@ -37,6 +37,11 @@ A chain of processes where each one started only the next, and all of them
 belong to the same owner, is drawn as one row named for the whole chain: it
 said nothing a level at a time and cost a keystroke a level.
 
+A row whose work is inside a container says so in parentheses after its own
+name: a runtime shim belongs to the runtime and its whole work is one level
+down. Where the row leads into several containers of one pod, it names the pod
+instead, by the first group of its identifier.
+
 keys: up and down move, PageUp and PageDown move by a screenful, Enter goes
 down and opens the card where there is nothing below, Backspace comes back up,
 i opens the card of any row, / filters by name, by command line and by owner,

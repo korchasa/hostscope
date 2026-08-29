@@ -552,6 +552,7 @@ linter catches layout, not meaning.
 | D-26 | Invariant 8: the `OWNER` column is demanded on every frame, no longer only where it happens to be drawn |
 | D-30 | V1 over a snapshot holding a shim with one child in a container: the row names the container in parentheses and keeps its own owner, a row with two containers under it names neither, and the filter typed with the container name finds the row that leads into it |
 | D-31 | V1 over a snapshot laid out as a Kubernetes node: a shim with the pod sandbox and the workload container under it names the pod, a shim whose two children sit in different pods names nothing, and the parser reads the pod out of both cgroup driver layouts |
+| Section 11 | `tests/documents.rs`: what `--help` prints stands in `README.md` word for word, so the description of the screen has one source and `make readme` is what moves it |
 | Section 6 | Section 9 of this document |
 
 ## 14. Link to the requirements
