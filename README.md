@@ -131,3 +131,7 @@ host is named with the `hs-` prefix.
 - How to verify: [docs/testing.md](docs/testing.md). The rigs, the frame
   invariants, the induced states, the figures of the last full run, and
   which check covers which requirement.
+
+## License
+
+Apache License 2.0. The full text is in [LICENSE](LICENSE).

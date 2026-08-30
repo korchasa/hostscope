@@ -1,0 +1,19 @@
+# What `make fast` does on a Mac, on every push: the format, clippy with
+# warnings as errors, and the whole suite. The live check is not here and cannot
+# be - it needs a host of its own, root on it, and about two minutes.
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The runner image carries a Rust toolchain; these two components are what
+      # `make fast` adds to it. Naming no third-party action keeps the workflow
+      # as small as the dependency list of the application itself.
+      - run: rustup component add rustfmt clippy
+      - run: make fast
