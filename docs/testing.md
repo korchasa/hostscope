@@ -517,21 +517,24 @@ files. Settled by D-40: the budget carries two numbers now, 4 percent
 where nothing is in swap and 5 where the column is drawn, and the check
 reads `/proc/meminfo` to know which of them it is holding the host to.
 
-**The last full run, on the Kubernetes rig, 2026-08-29.** 39 checks
-passed, none failed, one skipped, in 134 seconds. The frame linter went
-over 133 frames rather than the 29 the `tmux` walks used to produce -
-spelling a filter one key per frame yields a frame per letter, and each
-one is checked against every invariant for free. It is the first run on
-`ratatui` 0.30. A 50 percent quota showed as 0.502 cores, the search
-found its node among 619, collection took 41.3 ms at the 95th percentile
-and a redraw 1.0 ms, the first frame arrived after 15.7 ms, the
-application sent 1330 bytes per frame with five full screen clears in 20
-seconds - the repaint of D-38 - and it spent 2.58 percent of one core and
-1.4 MB on itself. Nothing moved beyond the spread between two runs of the
-same binary. That rig has swapped nothing, so it draws no swap
-column and pays nothing for it (D-35): the figure is the same as before
-the column existed. `strace` showed one `execve`, no file opened for
-writing and no `/proc/<pid>/environ` opened at all.
+**The last full run, on the Kubernetes rig, 2026-08-30.** 42 checks
+passed, none failed, one skipped, in 134 seconds. It is the first run
+where the security section can fail: the trace is `%file` now and records
+2041 opens under `/proc` where the old filter recorded none, so the three
+counts taken from it stopped being zero out of zero (V7). The account
+database is opened once by the default run and by no run that passes
+`--no-etc-passwd` (D-41), and nothing at all is opened outside `/proc`,
+`/sys/fs/cgroup` and that one file (FR-10a).
+
+The figures of that run: a 50 percent quota showed as 0.502 cores,
+collection took 41.2 ms at the 95th percentile and a redraw 0.9 ms, the
+first frame arrived after 15.9 ms, the application sent 1329 bytes per
+frame with five full screen clears in 20 seconds - the repaint of D-38 -
+and it spent 2.09 percent of one core and 1.1 MB on itself. The oracle
+agreed on 209 processes, sysstat and procps on 828 figures over 207 rows,
+netlink within two tenths of a percent on both directions, and the linter
+found nothing in 45 frames. That rig has swapped nothing, so it draws no
+swap column and pays nothing for it (D-35).
 
 The skipped check is the container with a 120 character name: that rig
 runs containerd under microk8s and has no Docker to raise the state
