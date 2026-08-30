@@ -148,7 +148,7 @@ def main():
         return 1
     model = json.loads(out)
 
-    problems, checked, skipped = [], 0, 0
+    problems, checked, skipped, compared = [], 0, 0, 0
     for node in walk(model["tree"], []):
         pids = set(subtree_pids(node, []))
         # A subtree that lost a process took its counter with it, and the
@@ -159,28 +159,48 @@ def main():
         checked += 1
         name = f"{node.get('pid')} {node.get('name')}"
 
-        want = sum(rates.get(p, {}).get("cpu", 0.0) for p in pids)
-        got = node["instant"]["cpu"]
-        if got is not None and not close_enough(want, got, CPU_REL, CPU_ABS):
-            problems.append(f"cpu  {name}: pidstat {want:.3f} cores, model {got:.3f}")
-
-        want = sum(rss[p] for p in pids)
-        got = node["instant"]["mem"]
-        if got is not None and not close_enough(want, got, MEM_REL, MEM_ABS):
-            problems.append(f"mem  {name}: ps {want:.0f} bytes, model {got:.0f}")
-
+        # Every figure of the row, beside the same figure as somebody else read
+        # it: who read it, the tolerance it is held to, and how it is written.
+        checks = [
+            ("cpu", "pidstat", sum(rates.get(p, {}).get("cpu", 0.0) for p in pids),
+             node["instant"]["cpu"], CPU_REL, CPU_ABS, "{:.3f} cores"),
+            ("mem", "ps", sum(rss[p] for p in pids),
+             node["instant"]["mem"], MEM_REL, MEM_ABS, "{:.0f} bytes"),
+        ]
         for field in ("rd", "wr"):
-            want = sum(rates.get(p, {}).get(field, 0.0) for p in pids)
-            got = node["instant"][field]
-            if got is not None and not close_enough(want, got, IO_REL, IO_ABS):
+            checks.append((
+                field, "pidstat",
+                sum(rates.get(p, {}).get(field, 0.0) for p in pids),
+                node["instant"][field], IO_REL, IO_ABS, "{:.0f} B/s",
+            ))
+
+        for field, who, want, got, rel, absolute, fmt in checks:
+            # A missing figure is a problem, not a row to pass over. The section
+            # runs as root, so a value the model leaves out is one it failed to
+            # produce; passing over it is what let a run where every figure was
+            # missing report that it had compared two hundred rows and found
+            # nothing wrong.
+            if got is None:
+                problems.append(f"{field:<3} {name}: the model has no figure at all")
+                continue
+            compared += 1
+            if not close_enough(want, got, rel, absolute):
                 problems.append(
-                    f"{field}   {name}: pidstat {want:.0f} B/s, model {got:.0f}"
+                    f"{field:<3} {name}: {who} {fmt.format(want)}, "
+                    f"model {fmt.format(got)}"
                 )
+
+    # Nothing compared at all is the state this check exists to notice, the same
+    # way the frame linter notices that it linted no frames: every row skipped as
+    # churn leaves a log that says zero problems and means zero comparisons.
+    if compared == 0:
+        problems.append("nothing was compared at all")
 
     elapsed = time.time() - started
     print(
-        f"pidstat: {checked} rows compared against sysstat and procps over "
-        f"{elapsed:.1f} s, {skipped} skipped as churn, {len(problems)} problems"
+        f"pidstat: {compared} figures on {checked} rows compared against "
+        f"sysstat and procps over {elapsed:.1f} s, {skipped} rows skipped as "
+        f"churn, {len(problems)} problems"
     )
     for p in problems:
         print("  " + p)

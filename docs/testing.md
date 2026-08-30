@@ -256,6 +256,14 @@ Removing the division by a hundred from its own reading of `%CPU` makes
 seventeen rows disagree by exactly that factor, which is how it is known
 to be able to fail.
 
+A figure the model does not give is a problem here rather than a row to
+pass over, and the summary counts the figures compared and not the rows
+walked. The section runs as root, so a value the model leaves out is one
+it failed to produce; passing over it let a model whose every figure was
+missing report two hundred rows compared and nothing wrong. A run that
+compared nothing at all - every row skipped as churn - is a problem for
+the same reason the frame linter treats a run with no frames as one.
+
 The two network figures of the header had nothing behind them at all: the
 oracle does not read them, and `pidstat` has nothing to say about a
 network namespace. `scripts/netlink-check.py` asks iproute2 for the same
