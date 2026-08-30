@@ -855,6 +855,11 @@ D-16. Own CPU usage against the budget of section 6. DECIDED
 budget with the tree size it was taken on - under 4 percent of one core
 on about 110 cgroups and 370 processes at a one second interval.
 
+Widened by D-40 on 2026-08-29: this number holds where the host has
+swapped nothing, and the budget is 5 percent where it has and the swap
+column is therefore drawn. The decision itself stands as it was taken -
+this line is here so the four is not quoted alone.
+
 Measured on the Docker rig: 3.0 - 3.5 percent, memory 3 MB against a
 budget of 100 MB. The old line asked for under 2 percent without saying
 on what tree, which made it unverifiable: the cost of a tick follows the
