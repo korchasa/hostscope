@@ -287,6 +287,26 @@ mod tests {
         assert_eq!(index_of("lit"), None, "the lit trial is still here");
     }
 
+    /// Since FR-21 the three roles are three READINGS of a figure, not three
+    /// accents of a layout: calm, unusual and alarm. A palette where two of
+    /// them are the same colour says the wrong thing about a number, which the
+    /// test below cannot see - it only holds each of them against the ground.
+    #[test]
+    fn the_three_readings_are_told_apart_in_every_palette() {
+        for t in THEMES.iter() {
+            assert_ne!(t.calm, t.accent, "{}: calm and unusual are one", t.name);
+            assert_ne!(t.accent, t.signal, "{}: unusual and alarm are one", t.name);
+            assert_ne!(t.calm, t.signal, "{}: calm and alarm are one", t.name);
+            // The ordinary text of a row is the fourth thing the eye compares
+            // them against: a reading that matches the ink is no reading.
+            if let Some(ink) = t.ink {
+                for (role, c) in [("unusual", t.accent), ("alarm", t.signal)] {
+                    assert_ne!(c, ink, "{}: {role} is the colour of plain text", t.name);
+                }
+            }
+        }
+    }
+
     /// The bar of the selected row keeps the colour of its band (D-20), so a
     /// theme whose selection ground is one of those colours hides the reading
     /// on exactly the row the reader is looking at.

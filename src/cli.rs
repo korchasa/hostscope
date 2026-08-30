@@ -19,6 +19,10 @@ usage: hostscope [options]
   --docker-socket PATH    the docker socket, or 'none' to disable enrichment
   --dump-model json       print the tree model as numbers to stdout and exit
   --dump-frame N          render N frames as text to stdout and exit
+  --dump-style N          the same N frames, each followed by a map of the
+                          same shape naming the role of every cell: . plain,
+                          c calm, u unusual, a alarm, b bar, s selected,
+                          m matched
   --keys \"Right a Esc\"    run a key program and stop
   --size WxH              frame size for --dump-frame (default 100x30)
   --log FILE              write the log to FILE; never to the terminal
@@ -80,6 +84,21 @@ are ordered by, so the longest bar is always on the top row.
 CPU is measured in busy cores: 0.5 means half a core is busy, 2.0 means two
 cores are.
 
+A figure the machine cannot afford is drawn in another colour, and the row it
+sits on is marked in its name column: '!' where something is wrong, '*' where
+it is worth a look, and a down arrow where the row is only the way down to the
+process that carries it. Every figure is the sum of a subtree, so without that
+distinction one busy process would mark every row above it up to the root. The
+reading is absolute - a share of what this machine has,
+or a state the kernel reports, such as a process left dead or stuck in the
+kernel. It is never a comparison against the other rows on screen, so a quiet
+machine stays quiet. Disk read and write carry no colour: nothing readable says
+what the device underneath can do. The bar keeps comparing the rows of the
+level, so a long bar beside a calm figure means large here, not large for this
+machine. The card of a marked row says why it is marked: one line per rule that
+fired, named after the card row its figure stands on, and naming that figure in
+both columns, the whole it was read against and the threshold it crossed.
+
 Eight palettes. 'classic' names the sixteen terminal colours, so the screen
 looks the way the reader's own terminal theme draws them. 'panel' fixes the
 colours instead - a grey chassis, one orange on the sorted column, and the
@@ -96,6 +115,10 @@ pub struct Options {
     pub docker: Source,
     pub dump_model: bool,
     pub dump_frame: Option<usize>,
+    /// Print the role of every cell after each frame. Colour is the one thing
+    /// drawn text cannot carry, so the reading that decides it needs a channel
+    /// of its own before anything can check it (D-42).
+    pub dump_style: bool,
     pub keys: Vec<Key>,
     pub size: (u16, u16),
     pub log: Option<PathBuf>,
@@ -119,6 +142,7 @@ impl Default for Options {
             docker: Source::Socket("/var/run/docker.sock".into()),
             dump_model: false,
             dump_frame: None,
+            dump_style: false,
             keys: Vec::new(),
             size: (100, 30),
             log: None,
@@ -169,6 +193,14 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> 
                     v.parse()
                         .map_err(|_| format!("--dump-frame: not a number: {v}"))?,
                 );
+            }
+            "--dump-style" => {
+                let v = value("--dump-style")?;
+                o.dump_frame = Some(
+                    v.parse()
+                        .map_err(|_| format!("--dump-style: not a number: {v}"))?,
+                );
+                o.dump_style = true;
             }
             "--keys" => o.keys = Key::program(&value("--keys")?)?,
             "--size" => {

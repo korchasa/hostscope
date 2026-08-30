@@ -54,6 +54,65 @@ def cell_index(line, column):
     return len(line)
 
 
+# The roles `--dump-style` names, one character per cell. A map line is made of
+# nothing else, which is how a unit of two halves is told from a plain frame.
+ROLES = set(".cuasmb")
+
+
+def split_style(frame):
+    """A `--dump-style` unit is a frame and a map of the same shape.
+
+    Returns the frame and its map, or the frame and None where there is no map.
+    A drawn frame always carries box drawing, so it can never be mistaken for a
+    map made only of `.cuasm`.
+    """
+    n = len(frame)
+    if n < 2 or n % 2:
+        return frame, None
+    half = frame[len(frame) // 2 :]
+    if all(line and set(line) <= ROLES for line in half):
+        return frame[: len(frame) // 2], half
+    return frame, None
+
+
+def lint_style(text, roles, name):
+    """17. The map covers the frame cell for cell (D-42).
+
+    One character per cell, so a name in a wide script makes the map longer in
+    characters than the text and exactly as wide. A map that does not line up
+    says nothing about the colours it claims to describe.
+    """
+    bad = []
+    if len(roles) != len(text):
+        bad.append(f"{name}: the map has {len(roles)} lines against {len(text)}")
+        return bad
+    for i, (t, m) in enumerate(zip(text, roles)):
+        if len(m) != width_of(t):
+            bad.append(
+                f"{name}: line {i} is {width_of(t)} cells "
+                f"and its map is {len(m)} characters"
+            )
+    return bad
+
+
+def role_cells(roles, role):
+    """18. How loud the screen is (D-42).
+
+    Reported for every frame and never a failure on its own: a ceiling fitted
+    to two rigs cannot tell a palette that is too loud from a host that is
+    genuinely in trouble, and the second is what this tool is for. The induced
+    states of the live check know the right answer in advance and say so with
+    `--alarm-min`.
+
+    Only the alarm count is a floor anybody may stand on. The signal colour is
+    drawn by the reading and by the bar, and the bar has a role of its own - so
+    an `a` cell is a reading and nothing else. The accent is not so clean: it
+    also paints the header of the sorted column and the label of the
+    measurement window, so the `u` count is reported and never demanded.
+    """
+    return sum(line.count(role) for line in roles)
+
+
 def lint(frame, name):
     bad = []
     if not frame:
@@ -212,12 +271,22 @@ def frames_of(path):
 
 
 def main():
-    files = sys.argv[1:]
+    argv = sys.argv[1:]
+    # The floor is only given where the right answer is known in advance - the
+    # induced states the live check raises itself.
+    alarm_min = None
+    if "--alarm-min" in argv:
+        i = argv.index("--alarm-min")
+        alarm_min = int(argv[i + 1])
+        argv = argv[:i] + argv[i + 2 :]
+    files = argv
     if not files:
         print(__doc__)
         return 2
     problems = []
     total = 0
+    maps = 0
+    counts = {"a": 0, "u": 0}
     for path in files:
         # A path that cannot be read is a problem to report, not a traceback to
         # decipher. An unmatched shell glob arrives here as its own pattern.
@@ -226,16 +295,36 @@ def main():
         except OSError as e:
             problems.append(f"{path}: cannot be read: {e.strerror}")
             continue
+        plain = []
         for n, frame in enumerate(frames):
             total += 1
-            problems += lint(frame, f"{path}#{n}")
-        problems += lint_across(frames, path)
+            text, roles = split_style(frame)
+            if roles is not None:
+                maps += 1
+                for role in counts:
+                    counts[role] += role_cells(roles, role)
+                problems += lint_style(text, roles, f"{path}#{n}")
+            plain.append(text)
+            problems += lint(text, f"{path}#{n}")
+        problems += lint_across(plain, path)
     # A linter that linted nothing must not report success: silence here means
     # the sections that capture frames did not run, and that is the state this
     # check exists to notice.
     if total == 0:
         problems.append("no frames to lint at all")
-    print(f"linter: {total} frames, {len(problems)} problems")
+    if alarm_min is not None:
+        if maps == 0:
+            problems.append("--alarm-min was given but no frame carried a map")
+        elif counts["a"] < alarm_min:
+            problems.append(
+                f"the screen stayed quiet: {counts['a']} cells read alarm, "
+                f"at least {alarm_min} were expected here"
+            )
+    print(
+        f"linter: {total} frames, {maps} with a style map, "
+        f"{counts['a']} alarm and {counts['u']} unusual cells, "
+        f"{len(problems)} problems"
+    )
     for p in problems:
         print("  " + p)
     return 1 if problems else 0

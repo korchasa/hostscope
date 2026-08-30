@@ -68,7 +68,12 @@ walk() {
   local count
   count=$(printf '%s' "$keys" | wc -w | tr -d ' ')
   rm -f "$DIR"/frames/"$name"-*.txt
-  sudo -n "$BIN" --keys "$keys" --dump-frame "$count" --tick "$WALK_TICK" \
+  # `--dump-style` rather than `--dump-frame`: a unit is the frame and a map of
+  # the same shape naming the role of every cell, so the linter can check that
+  # the colours line up and count how loud the screen was (D-42). Every check
+  # below reads the frame by line number or by grep, and the map sits after the
+  # last line of the frame, so none of them sees it.
+  sudo -n "$BIN" --keys "$keys" --dump-style "$count" --tick "$WALK_TICK" \
     --size 100x30 "$@" > "$DIR/frames/$name.raw" 2>"$DIR/frames/$name.err"
   python3 - "$DIR/frames" "$name" <<'PY'
 import pathlib, sys
@@ -550,6 +555,38 @@ induced_disk() {
   fi
 }
 
+# The one induced state whose colour is known in advance. Everything else this
+# check raises reads unusual at most: a 50 percent quota is half a core, and the
+# alarm step is above a whole one. So a load that burns more than one core is
+# raised on purpose, and the linter is told to fail if the screen stayed quiet -
+# without it invariant 18 counts zero out of zero on a healthy host, which reads
+# exactly like a pass (FR-21, D-42).
+induced_alarm() {
+  part "8c. induced state: a figure the reading must call alarm (FR-21)"
+  rm -f "$DIR"/frames/alarm-*.txt
+  sudo -n systemd-run --scope --slice=hs -p CPUQuota=250% --unit=hs-alarm -q \
+    timeout 30 python3 -c '
+import os
+for _ in range(2):
+    if os.fork() == 0:
+        while True:
+            pass
+while True:
+    pass
+' hs-load-alarm &
+  wait_scope hs-alarm
+  wait_burn hs-alarm 3.0
+  sudo -n "$BIN" --dump-style 2 --tick 800 --size 100x30 \
+    > "$DIR/frames/alarm-00.txt" 2>/dev/null
+  sudo -n systemctl stop hs-alarm.scope 2>/dev/null
+  wait
+  if python3 "$DIR/frame-lint.py" --alarm-min 1 "$DIR/frames/alarm-00.txt"; then
+    pass "a row burning more than a core reads alarm, and the map says so"
+  else
+    fail "the reading did not reach the screen under a load it must call alarm"
+  fi
+}
+
 induced_many() {
   part "8. induced state: many nodes (FR-6)"
   # Each load is a copy of `sleep` under its own name, so the search can look
@@ -815,12 +852,15 @@ security() {
   # FR-10a as the same syscall fact: the whole surface of files opened for data,
   # not just the one file FR-9 forbids. A statically linked binary opens what the
   # application asked for and nothing else, so anything here that is not /proc,
-  # /sys/fs/cgroup or the account database is a read nobody declared.
+  # /sys/fs/cgroup, the account database or the link speeds is a read nobody
+  # declared. `/sys/class/net` is the denominator the network reading of the
+  # host row is a share of, and there is no other measured one (D-42).
   local outside
   outside=$(opened_paths "$DIR/strace.log" \
-    | grep -vE '^/proc($|/)|^/sys/fs/cgroup($|/)|^/etc/passwd$' | sort -u)
+    | grep -vE '^/proc($|/)|^/sys/fs/cgroup($|/)|^/etc/passwd$|^/sys/class/net($|/)' \
+    | sort -u)
   if [ -z "$outside" ]; then
-    pass "nothing was opened outside /proc, /sys/fs/cgroup and /etc/passwd (FR-10a)"
+    pass "nothing was opened outside /proc, /sys/fs/cgroup, /etc/passwd and /sys/class/net (FR-10a)"
   else
     fail "files were opened that the requirement does not name (FR-10a)"
     echo "$outside" | head -5 | sed 's/^/    /'
@@ -971,7 +1011,7 @@ cleanup() {
 
 # The order follows the section numbers the parts print, so a log reads in
 # the order of the verification document.
-ALL="prepare baseline oracle pidstat network scenario keys linter security induced_load induced_disk induced_many induced_vanishing induced_names degraded sizes measurements cleanup"
+ALL="prepare baseline oracle pidstat network scenario keys linter security induced_load induced_alarm induced_disk induced_many induced_vanishing induced_names degraded sizes measurements cleanup"
 # Each section is timed: the run costs minutes, and the only way to know which
 # minute is worth paying for is to see where it goes.
 for section in ${*:-$ALL}; do

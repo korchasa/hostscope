@@ -33,6 +33,11 @@ pub struct ProcSample {
     /// swapped something (D-35). `None` where the file could not be read or
     /// carries no such line, which is every kernel thread.
     pub swap: Option<f64>,
+    /// What the kernel says the process is doing, from field 3 of `stat`. Two
+    /// letters are readings no figure can give: `Z`, a process whose parent is
+    /// not reaping it, and `D`, a process blocked in the kernel - the usual
+    /// cause of a load that no CPU column explains (D-42).
+    pub state: char,
 }
 
 /// Everything a process card adds on top of the sample. Fields root would have
@@ -123,6 +128,7 @@ pub fn read(
         vsz: parsed.vsize,
         io,
         swap,
+        state: parsed.state,
     })
 }
 
@@ -168,6 +174,11 @@ struct StatFields {
     starttime: u64,
     vsize: f64,
     rss_pages: f64,
+    /// Field 3 of `stat`: `R` running, `S` sleeping, `D` in an uninterruptible
+    /// wait, `Z` a zombie. It comes free - the tail this function splits starts
+    /// at it - and two of those letters are readings a figure cannot give
+    /// (D-42).
+    state: char,
 }
 
 /// `/proc/<pid>/stat` cannot be split on spaces: the command sits in
@@ -181,6 +192,7 @@ fn parse_stat(text: &str) -> Option<StatFields> {
     // rest[0] is field 3 (state), so field N is rest[N - 3].
     let get = |n: usize| rest.get(n - 3).and_then(|v| v.parse::<f64>().ok());
     Some(StatFields {
+        state: rest.first().and_then(|f| f.chars().next()).unwrap_or('?'),
         ppid: get(4).unwrap_or(0.0) as i32,
         comm,
         utime: get(14).unwrap_or(0.0),
@@ -389,6 +401,18 @@ mod tests {
         assert_eq!(p.starttime, 999);
         assert_eq!(p.vsize, 12345.0);
         assert_eq!(p.rss_pages, 678.0);
+    }
+
+    #[test]
+    fn the_state_of_a_process_comes_out_of_the_stat_it_already_reads() {
+        // The state is field 3, the first of the tail this function splits, so
+        // it costs one index into a buffer already parsed - no second file.
+        let dead = "9 (worker) Z 7 9 9 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5 0 0 0";
+        let stuck = "9 (worker) D 7 9 9 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5 0 0 0";
+        let busy = "9 (worker) R 7 9 9 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5 0 0 0";
+        assert_eq!(parse_stat(dead).unwrap().state, 'Z');
+        assert_eq!(parse_stat(stuck).unwrap().state, 'D');
+        assert_eq!(parse_stat(busy).unwrap().state, 'R');
     }
 
     #[test]

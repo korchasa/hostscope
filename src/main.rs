@@ -128,9 +128,19 @@ fn run(options: Options) -> Result<(), String> {
                 app.update(snap);
             }
             let mut text = String::new();
-            for line in render::to_text(&render::frame(&app, w, h)) {
+            let lines = render::frame(&app, w, h);
+            for line in render::to_text(&lines) {
                 text.push_str(&line);
                 text.push('\n');
+            }
+            // The map follows its frame with no blank line between them: one
+            // unit of the dump is the frame and the map of the same shape, and
+            // whoever reads it splits the unit in half (D-42).
+            if options.dump_style {
+                for line in render::to_roles(&lines) {
+                    text.push_str(&line);
+                    text.push('\n');
+                }
             }
             text.push('\n');
             emit(&text);

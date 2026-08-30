@@ -5,7 +5,7 @@
 //! measurement mode survive every transition (FR-2, FR-6, FR-13).
 
 use crate::collect::procs::ProcExtras;
-use crate::model::{self_row, Kind, Mode, Node, Snapshot, Sort};
+use crate::model::{self_row, Kind, Limits, Mark, Mode, Node, Snapshot, Sort};
 
 /// A key of the program, named the way `--keys` and `tmux send-keys` name them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -107,16 +107,29 @@ impl View {
 pub struct Row {
     pub node: Node,
     pub children: usize,
+    /// Whether the row is where its reading comes from, or only the way up to
+    /// a child that carries it (D-44). It is computed here and not in the
+    /// renderer because the row keeps a shallow copy of the node, without the
+    /// children the remainder is derived from.
+    pub mark: Mark,
     pub trail: Vec<String>,
     pub home: Vec<String>,
     pub prefix: String,
 }
 
 impl Row {
-    fn of(node: &Node, trail: Vec<String>, home: Vec<String>, prefix: String) -> Row {
+    fn of(
+        node: &Node,
+        trail: Vec<String>,
+        home: Vec<String>,
+        prefix: String,
+        limits: &Limits,
+        mode: Mode,
+    ) -> Row {
         Row {
             node: node.shallow(),
             children: node.children.len(),
+            mark: node.mark(limits, mode),
             trail,
             home,
             prefix,
@@ -329,7 +342,14 @@ impl App {
             View::Tree => {
                 for c in &node.children {
                     if self.matches(c) {
-                        kids.push(Row::of(c, vec![c.id.clone()], Vec::new(), String::new()));
+                        kids.push(Row::of(
+                            c,
+                            vec![c.id.clone()],
+                            Vec::new(),
+                            String::new(),
+                            &self.view().limits,
+                            self.mode,
+                        ));
                     }
                 }
             }
@@ -346,7 +366,17 @@ impl App {
         });
         if let Some(row) = self_row(node) {
             if self.matches(&row) {
-                kids.insert(0, Row::of(&row, Vec::new(), Vec::new(), String::new()));
+                kids.insert(
+                    0,
+                    Row::of(
+                        &row,
+                        Vec::new(),
+                        Vec::new(),
+                        String::new(),
+                        &self.view().limits,
+                        self.mode,
+                    ),
+                );
             }
         }
         kids
@@ -370,7 +400,14 @@ impl App {
             if c.children.is_empty() {
                 if self.matches(c) {
                     let home = trail[..trail.len() - 1].to_vec();
-                    out.push(Row::of(c, trail.clone(), home, prefix.to_string()));
+                    out.push(Row::of(
+                        c,
+                        trail.clone(),
+                        home,
+                        prefix.to_string(),
+                        &self.view().limits,
+                        self.mode,
+                    ));
                 }
             } else {
                 let deeper = format!("{prefix}{}/", c.name);
@@ -378,7 +415,14 @@ impl App {
                     if self.matches(&own) {
                         // The remainder lives on the level of the node it was
                         // computed from, which is where `→` takes it.
-                        out.push(Row::of(&own, Vec::new(), trail.clone(), deeper.clone()));
+                        out.push(Row::of(
+                            &own,
+                            Vec::new(),
+                            trail.clone(),
+                            deeper.clone(),
+                            &self.view().limits,
+                            self.mode,
+                        ));
                     }
                 }
                 self.flatten(c, trail, &deeper, out);

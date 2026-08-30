@@ -6,7 +6,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::{App, Row, View};
-use crate::model::{Kind, Metrics, Mode, Node, OwnerKind, Sort};
+use crate::model::{
+    HostReadings, Kind, Mark, Metrics, Mode, Node, OwnerKind, Reading, Readings, Sort,
+};
 use crate::theme;
 use crate::util::{
     bar, bytes_str, char_width, cores_opt, dur_str, fit, fit_left, mem_str, or_na, pad, pad_left,
@@ -35,6 +37,19 @@ fn amber() -> Style {
 }
 fn red() -> Style {
     Style::default().fg(theme::current().signal)
+}
+/// The colour a figure takes from how it reads against the machine (D-42).
+/// `base` carries what the row already is - the ground of the selection, the
+/// dimming of a `(self)` remainder - and only the foreground moves, so a
+/// reading never costs the row its ground. A calm figure is left exactly as it
+/// was: the screen is quiet until the machine gives a reason.
+fn style_for(r: Reading, base: Style) -> Style {
+    let t = theme::current();
+    match r {
+        Reading::Calm => base,
+        Reading::Unusual => base.fg(t.accent),
+        Reading::Alarm => base.fg(t.signal),
+    }
 }
 fn plain() -> Style {
     match theme::current().ink {
@@ -227,6 +242,53 @@ pub fn to_text(lines: &[Line<'static>]) -> Vec<String> {
         .collect()
 }
 
+/// The glyphs `util::bar` draws with: the full block and the seven partial
+/// ones. A sparkline draws with the same set, and it is a reading of the level
+/// too, so both take the same role.
+fn is_bar_glyph(c: char) -> bool {
+    ('\u{2581}'..='\u{2588}').contains(&c)
+}
+
+/// The role of every cell of a frame, one character per CELL - so a name of
+/// Han letters makes a map longer in characters than the text and exactly as
+/// wide. `.` plain, `c` calm, `u` unusual, `a` alarm, `s` the ground of the
+/// selected row, `m` a cell the filter matched.
+///
+/// A reading wins over a ground where a cell carries both: the ground says
+/// where the cursor is, which the text already shows, while the reading is the
+/// thing nothing outside the process can see (D-42).
+pub fn to_roles(lines: &[Line<'static>]) -> Vec<String> {
+    let t = theme::current();
+    lines
+        .iter()
+        .map(|l| {
+            let mut out = String::new();
+            for s in &l.spans {
+                // The bar is a reading too, and drawn in the same three
+                // colours - but it reads the level rather than the machine
+                // (D-27, D-42). Counting its cells among the alarms would
+                // measure how many bars were long instead of how loud the
+                // reading was, so it takes a role of its own. It is told by
+                // what it draws with, since a colour cannot say it.
+                let role = if s.content.chars().any(is_bar_glyph) {
+                    'b'
+                } else {
+                    match (s.style.fg, s.style.bg) {
+                        (Some(c), _) if c == t.signal => 'a',
+                        (Some(c), _) if c == t.accent => 'u',
+                        (Some(c), _) if c == t.calm => 'c',
+                        (_, Some(b)) if b == t.mark_bg => 'm',
+                        (_, Some(b)) if b == t.sel_bg => 's',
+                        _ => '.',
+                    }
+                };
+                out.extend(std::iter::repeat_n(role, str_width(&s.content)));
+            }
+            out
+        })
+        .collect()
+}
+
 fn clip(spans: Vec<Span<'static>>, u: usize) -> Line<'static> {
     let mut all: Vec<Span<'static>> = vec![Span::styled("\u{2502}", frame_style())];
     let mut used = 0usize;
@@ -295,6 +357,9 @@ fn summary_cpu(app: &App, u: usize) -> Line<'static> {
     } else {
         0.0
     };
+    // The summary is the first thing read on the screen, so the figures the
+    // machine reports about itself carry their reading too (D-42).
+    let read = HostReadings::of(host.load[0], mem_used, 0.0, &snap.limits);
     clip(
         vec![
             Span::styled("  CPU ", dim()),
@@ -309,7 +374,10 @@ fn summary_cpu(app: &App, u: usize) -> Line<'static> {
             Span::styled(format!("{} ", pad_num(&format!("{:.1}%", pct), 6)), dim()),
             Span::styled(sparkline(&host.history, 12), teal()),
             Span::styled("  MEM ", dim()),
-            Span::styled(format!("{} ", pad_num(&mem_str(mem_used), 6)), plain()),
+            Span::styled(
+                format!("{} ", pad_num(&mem_str(mem_used), 6)),
+                style_for(read.mem, plain()),
+            ),
             Span::styled(bar(mem_frac, 8), teal()),
             Span::styled(
                 format!(" {}", pad_num(&format!("{:.0}%", mem_frac * 100.0), 4)),
@@ -336,6 +404,7 @@ fn summary_net(app: &App, u: usize) -> Line<'static> {
     } else {
         0.0
     };
+    let read = HostReadings::of(host.load[0], 0.0, swap_used, &snap.limits);
     // The window every number on screen is taken over (FR-13). It sits in the
     // right corner so the two modes cannot be confused.
     let window = if app.paused() {
@@ -374,7 +443,10 @@ fn summary_net(app: &App, u: usize) -> Line<'static> {
         ],
         vec![
             Span::styled("SWAP ", dim()),
-            Span::styled(format!("{} ", pad_num(&mem_str(swap_used), 6)), plain()),
+            Span::styled(
+                format!("{} ", pad_num(&mem_str(swap_used), 6)),
+                style_for(read.swap, plain()),
+            ),
             Span::styled(bar(swap_frac, 6), amber()),
             Span::styled(
                 format!(" {}   ", pad_num(&format!("{:.0}%", swap_frac * 100.0), 4)),
@@ -383,10 +455,16 @@ fn summary_net(app: &App, u: usize) -> Line<'static> {
         ],
         vec![
             Span::styled("LOAD ", dim()),
+            // Only the first figure is a reading of now; the other two are
+            // where it came from, and colouring them would say the machine is
+            // in trouble it has already left.
+            Span::styled(
+                pad_num(&format!("{:.2}", host.load[0]), 5),
+                style_for(read.load, plain()),
+            ),
             Span::styled(
                 format!(
-                    "{} {} {}",
-                    pad_num(&format!("{:.2}", host.load[0]), 5),
+                    " {} {}",
                     pad_num(&format!("{:.2}", host.load[1]), 5),
                     pad_num(&format!("{:.2}", host.load[2]), 5)
                 ),
@@ -532,53 +610,90 @@ fn table_lines(app: &App, rows: &[Row], u: usize, content: usize, out: &mut Vec<
                     0.0
                 };
                 let bar_st = bar_style(app.sort, m, frac).patch(bar_base);
+                // The reading of the row is absolute - a share of what this
+                // machine can do - while the bar beside it is the share of the
+                // largest row of the level. The two disagree by design, and
+                // D-42 says what each of them means when they do.
+                let read = r.node.readings(&app.view().limits, app.mode);
                 let mut spans: Vec<Span<'static>> = Vec::new();
                 // The filter is marked where it matched, on the three cells of
                 // a row that can carry a match: the path the list view puts in
                 // front of a name, the name itself, and the owner beside it.
                 // The fourth place the filter looks - the command line - is
                 // under the table, on the hint line, and is marked there.
+                // The worst reading of the row, drawn in the leading cell of
+                // the name column. A glyph and not a ground: the ground is
+                // already spoken for three times over - the selected row, the
+                // `(self)` remainder and the filter mark - and a fourth
+                // claimant would have to win or lose against each of them. A
+                // glyph composes with all three by construction (D-42).
+                // Whether this row is where the reading comes from, or only the
+                // way up from a child that carries it (D-44). Every figure is
+                // the sum of a subtree, so one busy process would otherwise
+                // paint every row above it up to the root.
+                let mut lead = lead;
+                let mark = r.mark;
+                let glyph = match mark {
+                    Mark::Calm => ' ',
+                    Mark::Below(_) => '\u{2193}',
+                    Mark::Own(Reading::Unusual) => '*',
+                    Mark::Own(_) => '!',
+                };
+                lead.remove(0);
+                spans.push(Span::styled(
+                    glyph.to_string(),
+                    style_for(mark.reading(), base),
+                ));
                 spans.extend(marked(lead, &needle, pale));
                 spans.extend(marked(name, &needle, base));
                 spans.extend(marked(row_owner(&r.node, &cols), &needle, base));
                 spans.push(Span::styled(
                     pad_left(&or_na(m.tasks, |t| format!("{t:.0}")), cols.tasks),
-                    base,
+                    style_for(read.tasks, base),
                 ));
-                let value = |text: String, sort: Sort, spans: &mut Vec<Span<'static>>| {
-                    spans.push(Span::styled(text, base));
-                    if cols.bar_slot(sort) > 0 {
-                        spans.push(Span::styled(" ".to_string(), base));
-                        spans.push(Span::styled(bar(frac, cols.bar), bar_st));
-                    }
-                };
+                let value =
+                    |text: String, sort: Sort, reading: Reading, spans: &mut Vec<Span<'static>>| {
+                        spans.push(Span::styled(text, style_for(reading, base)));
+                        if cols.bar_slot(sort) > 0 {
+                            spans.push(Span::styled(" ".to_string(), base));
+                            spans.push(Span::styled(bar(frac, cols.bar), bar_st));
+                        }
+                    };
                 value(
                     format!("  {}", pad_left(&cores_opt(m.cpu), cols.cpu)),
                     Sort::Cpu,
+                    read.cpu,
                     &mut spans,
                 );
                 value(
                     format!("  {}", pad_left(&or_na(m.mem, mem_str), cols.mem)),
                     Sort::Mem,
+                    read.mem,
                     &mut spans,
                 );
                 if cols.swap {
                     spans.push(Span::styled(
                         format!("  {}", pad_left(&or_na(m.swap, mem_str), 7)),
-                        base,
+                        style_for(read.swap, base),
                     ));
                 }
                 if cols.disk {
+                    // Disk carries no reading: nothing readable says what the
+                    // device underneath can do (D-42).
                     value(
                         format!("  {}", pad_left(&pair_rate_opt(m.rd, m.wr), 10)),
                         Sort::Disk,
+                        Reading::Calm,
                         &mut spans,
                     );
                 }
                 if cols.net {
+                    // One cell holds both directions, so it takes the worse of
+                    // the two readings.
                     value(
                         format!("  {}", pad_left(&pair_rate_opt(m.rx, m.tx), 11)),
                         Sort::Net,
+                        read.rx.max(read.tx),
                         &mut spans,
                     );
                 }
@@ -1090,6 +1205,7 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
     };
     let mut lines: Vec<Line<'static>> = Vec::new();
     let window = dur_str(app.view().window);
+    let limits = app.view().limits;
 
     // The label is written once and the value continues under it: a card that
     // cut the tail off a value lost the end of a command line (D-33).
@@ -1122,7 +1238,17 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
     // every row: the reader runs the eye down it instead of searching each
     // line for the word `avg` (D-32). A value wider than its column pushes the
     // next one rather than being cut - a figure is never shortened in silence.
-    let fig = |k: &str, now: String, avg: String, tail: &str, lines: &mut Vec<Line<'static>>| {
+    // The card reads the row through the same function the table does, so a
+    // figure that is alarming in one cannot be quiet in the other (D-42). Each
+    // column takes the reading of its own mode.
+    let read_now = node.readings(&limits, Mode::Instant);
+    let read_avg = node.readings(&limits, Mode::Average);
+    let fig = |k: &str,
+               now: String,
+               avg: String,
+               reading: (Reading, Reading),
+               tail: &str,
+               lines: &mut Vec<Line<'static>>| {
         // The three columns take fifty cells; what the terminal leaves after
         // them is what the explanation beside the figures has to live in.
         let room = u.saturating_sub(52);
@@ -1130,8 +1256,8 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
         lines.push(clip(
             vec![
                 Span::styled(format!("  {}", pad(k, 16)), dim()),
-                Span::styled(pad(&now, 16), plain()),
-                Span::styled(pad(&avg, 16), plain()),
+                Span::styled(pad(&now, 16), style_for(reading.0, plain())),
+                Span::styled(pad(&avg, 16), style_for(reading.1, plain())),
                 Span::styled(
                     if inline {
                         tail.to_string()
@@ -1291,6 +1417,46 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
         }
     }
 
+    // Why the row is marked, one line per heuristic that fired, above the
+    // figures rather than under them: a card that does not fit is cut from its
+    // tail (D-25), and the reason is the thing the reader opened the card for.
+    // A row where everything reads calm carries no block at all - the card
+    // prints what this node has and nothing else (section 11, D-43).
+    let found = Readings::findings(
+        &node.instant,
+        &node.avg,
+        &limits,
+        node.detail.state.unwrap_or('?'),
+        node.kind == Kind::Host,
+    );
+    if !found.is_empty() {
+        lines.push(clip(vec![], u));
+        lines.push(clip(
+            vec![Span::styled(
+                format!("  {}", pad("marked because", 16)),
+                dim(),
+            )],
+            u,
+        ));
+        for f in &found {
+            // The name takes the colour of its own reading, so the block reads
+            // the same way the row does (D-42).
+            let parts = wrap(&f.why, u.saturating_sub(20));
+            for (i, part) in parts.into_iter().enumerate() {
+                lines.push(clip(
+                    vec![
+                        Span::styled(
+                            format!("  {}", pad(if i == 0 { f.name } else { "" }, 16)),
+                            style_for(f.reading, dim()),
+                        ),
+                        Span::styled(part, plain()),
+                    ],
+                    u,
+                ));
+            }
+        }
+    }
+
     lines.push(clip(vec![], u));
     // Both modes stand side by side rather than in turn: the gap between them
     // is the diagnosis (section 11). The heading names them once, above the
@@ -1306,6 +1472,7 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
         "cpu",
         format!("{} cores", cores_opt(node.instant.cpu)),
         format!("{} cores", cores_opt(node.avg.cpu)),
+        (read_now.cpu, read_avg.cpu),
         "",
         &mut lines,
     );
@@ -1320,6 +1487,7 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
         },
         or_na(node.instant.mem, mem_str),
         or_na(node.avg.mem, mem_str),
+        (read_now.mem, read_avg.mem),
         // What the number counts, not only whose it is: RSS counts a shared
         // page in full for every process that maps it, which is why the PSS
         // two rows below is smaller and why a column of RSS values sums to
@@ -1340,6 +1508,9 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
             "own virtual",
             or_na(node.detail.vsz, mem_str),
             String::new(),
+            // The virtual size is not memory held, so there is nothing to read
+            // it against (D-42).
+            (Reading::Calm, Reading::Calm),
             "address space mapped, not memory held",
             &mut lines,
         );
@@ -1348,6 +1519,7 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
                 "own PSS",
                 mem_str(pss),
                 String::new(),
+                (Reading::Calm, Reading::Calm),
                 "shared pages divided among those that map them",
                 &mut lines,
             );
@@ -1359,6 +1531,7 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
             "own swap",
             or_na(app.card_extras.as_ref().and_then(|e| e.swap), mem_str),
             String::new(),
+            (read_now.swap, read_avg.swap),
             "pages moved out of RAM to the swap device",
             &mut lines,
         );
@@ -1367,6 +1540,8 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
         "disk r/w",
         per_second(pair_rate_opt(node.instant.rd, node.instant.wr)),
         per_second(pair_rate_opt(node.avg.rd, node.avg.wr)),
+        // Disk carries no reading at all (D-42).
+        (Reading::Calm, Reading::Calm),
         &node
             .detail
             .io_total
@@ -1378,6 +1553,7 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
         "net \u{2193}/\u{2191}",
         per_second(pair_rate_opt(node.instant.rx, node.instant.tx)),
         per_second(pair_rate_opt(node.avg.rx, node.avg.tx)),
+        (read_now.rx.max(read_now.tx), read_avg.rx.max(read_avg.tx)),
         if node.detail.own_netns {
             "own netns"
         } else if app.view().ebpf {
@@ -1603,6 +1779,432 @@ mod tests {
             "the bar lost its own colour: {:?}",
             bar.style
         );
+    }
+
+    /// The colour of a figure is a reading of the machine, and the reading is
+    /// absolute: the same 2 cores are alarming whether or not a busier row
+    /// sits above them (D-42).
+    #[test]
+    fn a_figure_past_its_threshold_is_drawn_in_the_signal_colour() {
+        use crate::model::{Kind, Limits, Metrics, Node};
+        let mut snap = Snapshot::empty();
+        snap.host.cores = 4.0;
+        snap.limits = Limits {
+            cores: 4.0,
+            mem_total: 8.0 * 1024.0 * 1024.0 * 1024.0,
+            ..Limits::default()
+        };
+        for (name, cpu) in [("alpha", 2.0), ("beta", 0.01)] {
+            let mut n = Node::new(format!("p:{name}"), name, Kind::Process);
+            n.instant = Metrics {
+                cpu: Some(cpu),
+                mem: Some(100.0),
+                ..Metrics::default()
+            };
+            n.avg = n.instant;
+            n.detail.state = Some('S');
+            snap.root.children.push(n);
+        }
+        let mut app = App::new(snap);
+        // Off the first row, so the selection ground is not what is measured.
+        app.cursor = 1;
+        let lines = frame(&app, 100, 30);
+        let cell = |row: &str, want: &str| -> Style {
+            let line = lines
+                .iter()
+                .find(|l| l.spans.iter().any(|s| s.content.contains(row)))
+                .unwrap_or_else(|| panic!("{row} is not on screen"));
+            line.spans
+                .iter()
+                .find(|s| s.content.trim() == want)
+                .unwrap_or_else(|| panic!("{row} has no cell {want}"))
+                .style
+        };
+        let t = theme::current();
+        assert_eq!(cell("alpha", "2.000").fg, Some(t.signal));
+        assert_ne!(cell("beta", "0.010").fg, Some(t.signal));
+    }
+
+    /// The summary line is the first thing read on the screen, so the three
+    /// figures the machine reports about itself carry their reading too
+    /// (D-42).
+    #[test]
+    fn the_summary_of_the_machine_carries_its_own_reading() {
+        use crate::model::Limits;
+        const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+        let mut snap = Snapshot::empty();
+        snap.host.cores = 4.0;
+        snap.host.mem_total = 8.0 * GIB;
+        snap.host.mem_used = 7.6 * GIB;
+        snap.host.mem_used_avg = snap.host.mem_used;
+        snap.host.swap_total = 2.0 * GIB;
+        snap.host.swap_used = 1.4 * GIB;
+        snap.host.swap_used_avg = snap.host.swap_used;
+        snap.host.load = [9.0, 0.10, 0.10];
+        snap.limits = Limits {
+            cores: 4.0,
+            mem_total: 8.0 * GIB,
+            swap_total: 2.0 * GIB,
+            ..Limits::default()
+        };
+        let lines = frame(&App::new(snap), 120, 30);
+        let t = theme::current();
+        let styled = |want: &str| -> Style {
+            lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .find(|s| s.content.trim() == want)
+                .unwrap_or_else(|| panic!("no cell {want} on screen"))
+                .style
+        };
+        assert_eq!(styled("9.00").fg, Some(t.signal), "the load");
+        assert_eq!(styled("7.6G").fg, Some(t.signal), "the memory");
+        assert_eq!(styled("1.4G").fg, Some(t.signal), "the swap");
+        // The other two are where the load came from, not where it is, and
+        // they keep the colour they always had.
+        assert_ne!(styled("0.10  0.10").fg, Some(t.signal));
+    }
+
+    /// A row whose figures are all its children's is the way down to the
+    /// problem, not the problem: pid 1 has the whole machine in its subtree,
+    /// so a mark that did not say so is a tautology (D-44).
+    #[test]
+    fn a_row_that_only_leads_to_the_problem_is_marked_as_the_way_down() {
+        use crate::model::{Kind, Limits, Metrics, Node};
+        let mut snap = Snapshot::empty();
+        snap.host.cores = 4.0;
+        snap.limits = Limits {
+            cores: 4.0,
+            mem_total: 8.0 * 1024.0 * 1024.0 * 1024.0,
+            ..Limits::default()
+        };
+        let mut parent = Node::new("p:1", "systemd", Kind::Process);
+        parent.instant = Metrics {
+            cpu: Some(2.5),
+            mem: Some(100.0),
+            ..Metrics::default()
+        };
+        parent.avg = parent.instant;
+        parent.detail.state = Some('S');
+        let mut child = Node::new("p:2", "worker", Kind::Process);
+        child.instant = parent.instant;
+        child.avg = parent.instant;
+        child.detail.state = Some('S');
+        parent.children.push(child);
+        snap.root.children.push(parent);
+
+        let mut app = App::new(snap);
+        app.cursor = app
+            .rows()
+            .iter()
+            .position(|r| r.node.name == "systemd")
+            .expect("the parent is a row of the top level");
+        let lines = frame(&app, 100, 30);
+        let text = to_text(&lines);
+        let mark = |want: &str| -> char {
+            text.iter()
+                .find(|l| l.contains(want))
+                .unwrap_or_else(|| panic!("{want} is not on screen"))
+                .chars()
+                .nth(1)
+                .unwrap()
+        };
+        assert_eq!(mark("systemd"), '\u{2193}', "the way down");
+        // Going into it puts the source on screen, and there the mark is solid.
+        app.on_key(crate::app::Key::Right, std::path::Path::new("/proc"));
+        let inner = to_text(&frame(&app, 100, 30));
+        let worker = inner
+            .iter()
+            .find(|l| l.contains("worker"))
+            .expect("the child is on the level below");
+        assert_eq!(worker.chars().nth(1), Some('!'), "{worker:?}");
+    }
+
+    /// A colour on a figure says which figure; a glyph on the row says which
+    /// row, and it is found by running the eye down one column instead of
+    /// reading five. A glyph and not a ground: the ground is spoken for three
+    /// times over already - the selection, the `(self)` row and the filter
+    /// mark - and a fourth claimant would have to win or lose against each of
+    /// them (D-42).
+    #[test]
+    fn a_flagged_row_is_marked_in_the_name_column() {
+        use crate::model::{Kind, Limits, Metrics, Node};
+        let mut snap = Snapshot::empty();
+        snap.host.cores = 4.0;
+        snap.limits = Limits {
+            cores: 4.0,
+            mem_total: 8.0 * 1024.0 * 1024.0 * 1024.0,
+            ..Limits::default()
+        };
+        for (name, state) in [("alpha", 'S'), ("beta", 'Z'), ("gamma", 'D')] {
+            let mut n = Node::new(format!("p:{name}"), name, Kind::Process);
+            n.instant = Metrics {
+                cpu: Some(0.01),
+                mem: Some(100.0),
+                ..Metrics::default()
+            };
+            n.avg = n.instant;
+            n.detail.state = Some(state);
+            snap.root.children.push(n);
+        }
+        let mut app = App::new(snap);
+        app.cursor = 0;
+        let lines = frame(&app, 100, 30);
+        let row = |want: &str| -> &Line<'static> {
+            lines
+                .iter()
+                .find(|l| l.spans.iter().any(|s| s.content.contains(want)))
+                .unwrap_or_else(|| panic!("{want} is not on screen"))
+        };
+        let text = |l: &Line<'static>| -> String {
+            l.spans.iter().map(|s| s.content.to_string()).collect()
+        };
+        // The first cell of the line is the border the frame draws; the glyph
+        // is the one after it, where the name column begins.
+        let mark = |want: &str| -> char { text(row(want)).chars().nth(1).unwrap() };
+        assert_eq!(mark("beta"), '!', "{:?}", text(row("beta")));
+        assert_eq!(mark("gamma"), '*', "{:?}", text(row("gamma")));
+        assert_eq!(mark("alpha"), ' ', "a calm row carries no mark");
+        let t = theme::current();
+        let glyph = |want: &str| -> Style { row(want).spans[1].style };
+        assert_eq!(glyph("beta").fg, Some(t.signal));
+        assert_eq!(glyph("gamma").fg, Some(t.accent));
+    }
+
+    /// A glyph and a colour say that a figure is worth a second look, and
+    /// neither says what was compared against what. The card of a marked row
+    /// carries the reason, one line per heuristic that fired (D-43).
+    #[test]
+    fn the_card_says_why_the_row_is_marked() {
+        use crate::model::{Kind, Limits, Metrics, Node};
+        const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+        let mut snap = Snapshot::empty();
+        snap.host.cores = 4.0;
+        snap.limits = Limits {
+            cores: 4.0,
+            mem_total: 8.0 * GIB,
+            ..Limits::default()
+        };
+        let mut n = Node::new("p:1", "alpha", Kind::Process);
+        n.instant = Metrics {
+            cpu: Some(2.5),
+            mem: Some(2.4 * GIB),
+            ..Metrics::default()
+        };
+        n.avg = n.instant;
+        n.detail.state = Some('Z');
+        n.detail.pid = Some(1);
+        snap.root.children.push(n);
+        let mut app = App::new(snap);
+        app.on_key(crate::app::Key::Char('i'), std::path::Path::new("/proc"));
+        let text = to_text(&frame(&app, 100, 40));
+        let joined = text.join("\n");
+        for want in ["zombie", "cpu", "memory", "2.500", "30%", "25%"] {
+            assert!(joined.contains(want), "the card does not say {want:?}");
+        }
+        // Above the figures, not under them: a card that does not fit is cut
+        // from its tail, and the reason is what the reader opened it for.
+        let why = text.iter().position(|l| l.contains("zombie")).unwrap();
+        // The heading of the two figure columns, which is the top of the block
+        // the reason has to stand above.
+        let figures = text.iter().position(|l| l.contains("avg over")).unwrap();
+        assert!(why < figures, "the reason stands under the figures");
+    }
+
+    /// A card with nothing to explain carries no block at all: it prints what
+    /// this node has and nothing else (section 11, D-43).
+    #[test]
+    fn a_calm_row_has_no_reason_block_on_its_card() {
+        use crate::model::{Kind, Limits, Metrics, Node};
+        let mut snap = Snapshot::empty();
+        snap.host.cores = 4.0;
+        snap.limits = Limits {
+            cores: 4.0,
+            mem_total: 8.0 * 1024.0 * 1024.0 * 1024.0,
+            ..Limits::default()
+        };
+        let mut n = Node::new("p:1", "alpha", Kind::Process);
+        n.instant = Metrics {
+            cpu: Some(0.01),
+            mem: Some(1024.0),
+            ..Metrics::default()
+        };
+        n.avg = n.instant;
+        n.detail.state = Some('S');
+        n.detail.pid = Some(1);
+        snap.root.children.push(n);
+        let mut app = App::new(snap);
+        app.on_key(crate::app::Key::Char('i'), std::path::Path::new("/proc"));
+        let joined = to_text(&frame(&app, 100, 40)).join("\n");
+        assert!(!joined.contains("marked"), "{joined}");
+        assert!(!joined.contains("starts above"), "{joined}");
+    }
+
+    /// The reason the mark is a glyph and not a ground: the ground is already
+    /// spoken for three times over, and a glyph composes with all three. So
+    /// the mark has to survive the selected row and a filter match on the same
+    /// row (D-42).
+    #[test]
+    fn a_flagged_row_keeps_its_mark_under_selection_and_filter() {
+        use crate::model::{Kind, Limits, Metrics, Node};
+        let mut snap = Snapshot::empty();
+        snap.host.cores = 4.0;
+        snap.limits = Limits {
+            cores: 4.0,
+            mem_total: 8.0 * 1024.0 * 1024.0 * 1024.0,
+            ..Limits::default()
+        };
+        let mut n = Node::new("p:1", "alpha", Kind::Process);
+        n.instant = Metrics {
+            cpu: Some(0.01),
+            mem: Some(100.0),
+            ..Metrics::default()
+        };
+        n.avg = n.instant;
+        n.detail.state = Some('Z');
+        snap.root.children.push(n);
+        let mut app = App::new(snap);
+        app.filter = "alph".into();
+        app.cursor = 0;
+        let lines = frame(&app, 100, 30);
+        let text = to_text(&lines);
+        // The filter cuts the name into marked and unmarked spans, so the row
+        // is found in the joined text and read back as the whole line.
+        let at = text
+            .iter()
+            .position(|l| l.contains("alpha"))
+            .expect("the row is on screen");
+        assert_eq!(
+            text[at].chars().nth(1),
+            Some('!'),
+            "the mark did not survive: {:?}",
+            text[at]
+        );
+        let line = &lines[at];
+        let t = theme::current();
+        // The selection still owns the ground of the row, and the filter still
+        // owns the ground of what it matched.
+        assert!(
+            line.spans.iter().any(|s| s.style.bg == Some(t.sel_bg)),
+            "the selection lost its ground"
+        );
+        assert!(
+            line.spans.iter().any(|s| s.style.bg == Some(t.mark_bg)),
+            "the filter lost its mark"
+        );
+        assert_eq!(
+            line.spans[1].style.fg,
+            Some(t.signal),
+            "the glyph lost its colour"
+        );
+    }
+
+    /// The bar is a reading too, but a different one - the share of the
+    /// largest row of the level - and it is drawn in the same three colours.
+    /// Counting its cells as alarms would measure how many bars were long
+    /// rather than how loud the reading was, so the map gives it a role of its
+    /// own (D-42).
+    #[test]
+    fn the_map_tells_a_bar_from_a_figure() {
+        use crate::model::{Kind, Limits, Metrics, Node};
+        let mut snap = Snapshot::empty();
+        snap.host.cores = 4.0;
+        snap.limits = Limits {
+            cores: 4.0,
+            mem_total: 8.0 * 1024.0 * 1024.0 * 1024.0,
+            ..Limits::default()
+        };
+        let mut n = Node::new("p:1", "alpha", Kind::Process);
+        n.instant = Metrics {
+            cpu: Some(2.0),
+            mem: Some(100.0),
+            ..Metrics::default()
+        };
+        n.avg = n.instant;
+        n.detail.state = Some('S');
+        snap.root.children.push(n);
+        let app = App::new(snap);
+        let lines = frame(&app, 100, 30);
+        let text = to_text(&lines);
+        let roles = to_roles(&lines);
+        let row = text
+            .iter()
+            .position(|l| l.contains("alpha"))
+            .expect("the row is on screen");
+        // The bar of that row is drawn in the alarm colour and must not be
+        // counted as one.
+        assert!(text[row].contains('\u{2588}'), "{:?}", text[row]);
+        assert!(roles[row].contains('b'), "{:?}", roles[row]);
+        assert!(
+            roles[row].contains('a'),
+            "the figure itself still reads alarm: {:?}",
+            roles[row]
+        );
+        for (t, r) in text[row].chars().zip(roles[row].chars()) {
+            if t == '\u{2588}' {
+                assert_eq!(r, 'b', "a bar cell was counted as {r}");
+            }
+        }
+    }
+
+    /// The card and the table read one value: a figure that is alarming in
+    /// the table cannot be quiet in the card of the same row (D-42).
+    #[test]
+    fn the_card_reads_the_row_exactly_as_the_table_does() {
+        use crate::model::{Kind, Limits, Metrics, Node};
+        let mut snap = Snapshot::empty();
+        snap.host.cores = 4.0;
+        snap.limits = Limits {
+            cores: 4.0,
+            mem_total: 8.0 * 1024.0 * 1024.0 * 1024.0,
+            ..Limits::default()
+        };
+        let mut n = Node::new("p:1", "alpha", Kind::Process);
+        n.instant = Metrics {
+            cpu: Some(2.5),
+            mem: Some(100.0),
+            ..Metrics::default()
+        };
+        n.avg = Metrics {
+            cpu: Some(0.01),
+            mem: Some(100.0),
+            ..Metrics::default()
+        };
+        n.detail.state = Some('S');
+        n.detail.pid = Some(1);
+        snap.root.children.push(n);
+        let mut app = App::new(snap);
+        app.on_key(crate::app::Key::Char('i'), std::path::Path::new("/proc"));
+        assert!(app.card.is_some(), "the card did not open");
+        let lines = frame(&app, 100, 40);
+        let t = theme::current();
+        let cell = |want: &str| -> Style {
+            lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .find(|s| s.content.trim() == want)
+                .unwrap_or_else(|| panic!("no cell {want} on the card"))
+                .style
+        };
+        assert_eq!(cell("2.500 cores").fg, Some(t.signal), "now");
+        assert_ne!(cell("0.010 cores").fg, Some(t.signal), "the average");
+    }
+
+    /// The bar reads the share of the largest row of the level and section 11
+    /// makes that colour mandatory under every sorting. Routing it through the
+    /// absolute reading would draw every bar calm under a disk sorting, which
+    /// has no absolute reading at all (D-42).
+    #[test]
+    fn the_bar_keeps_reading_the_level_and_not_the_machine() {
+        use crate::model::{Metrics, Sort};
+        let m = Metrics {
+            rd: Some(1.0),
+            wr: Some(1.0),
+            ..Metrics::default()
+        };
+        let t = theme::current();
+        assert_eq!(bar_style(Sort::Disk, &m, 0.9).fg, Some(t.signal));
+        assert_eq!(bar_style(Sort::Disk, &m, 0.5).fg, Some(t.accent));
     }
 
     /// The one promise `chain_lines` makes: a link may be cut, never dropped,

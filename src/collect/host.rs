@@ -65,6 +65,43 @@ pub fn read(proc_root: &Path) -> RawHost {
     h
 }
 
+/// The task ceiling of the kernel, so a subtree's task count can be read as a
+/// share of what this machine allows (D-42). Absent where the file cannot be
+/// read - and then the heuristic does not fire, rather than dividing by a
+/// number this project invented.
+pub fn pid_max(proc_root: &Path) -> Option<f64> {
+    read_trim(&proc_root.join("sys/kernel/pid_max"))
+        .and_then(|t| t.parse::<f64>().ok())
+        .filter(|v| *v > 0.0)
+}
+
+/// The summed speed of the PHYSICAL links, in bytes per second, so the network
+/// figures of the host row can be read as a share of what the wire can carry
+/// (D-42).
+///
+/// Physical means an interface carrying a `device` entry. Not the set
+/// `parse_net_dev` sums: that one takes `docker0` and one `veth` per
+/// container, so the denominator would grow with the number of rows on screen.
+///
+/// `speed` answers `-1` for a link that is down and fails outright on an
+/// interface with no fixed rate, so only a positive reading is summed. Nothing
+/// summed means the reading is unavailable, never a guess.
+pub fn link_speed(class_net: &Path) -> Option<f64> {
+    let mut bits = 0.0;
+    for entry in fs::read_dir(class_net).ok()?.flatten() {
+        let d = entry.path();
+        if fs::symlink_metadata(d.join("device")).is_err() {
+            continue;
+        }
+        if let Some(mbit) = read_trim(&d.join("speed")).and_then(|t| t.parse::<f64>().ok()) {
+            if mbit > 0.0 {
+                bits += mbit * 1_000_000.0;
+            }
+        }
+    }
+    (bits > 0.0).then_some(bits / 8.0)
+}
+
 fn read_trim(p: &Path) -> Option<String> {
     fs::read_to_string(p).ok().map(|t| t.trim().to_string())
 }
@@ -163,5 +200,64 @@ mod tests {
     fn skips_the_loopback_in_the_interface_total() {
         let text = "Inter-|   Receive\n face |bytes\n    lo: 999 0 0 0 0 0 0 0 999 0\n  eth0: 100 0 0 0 0 0 0 0 200 0\n";
         assert_eq!(parse_net_dev(text), (100.0, 200.0));
+    }
+
+    /// Builds a `/sys/class/net` the way the kernel lays one out: a physical
+    /// interface carries a `device` entry, a virtual one does not.
+    fn a_class_net(case: &str, ifs: &[(&str, &str, bool)]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("hs-net-{}-{}", std::process::id(), case));
+        let _ = fs::remove_dir_all(&dir);
+        for (name, speed, physical) in ifs {
+            let d = dir.join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("speed"), speed).unwrap();
+            if *physical {
+                fs::write(d.join("device"), "").unwrap();
+            }
+        }
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_link_speed_sums_the_physical_interfaces_and_nothing_else() {
+        // The bridge and the veth of a container report a speed too, and
+        // summing them would grow the denominator with the rows on screen.
+        let dir = a_class_net(
+            "physical",
+            &[
+                ("eth0", "1000\n", true),
+                ("eth1", "1000\n", true),
+                ("docker0", "10000\n", false),
+                ("veth1a2b", "10000\n", false),
+            ],
+        );
+        // 2000 Mbit/s is 250 MB/s.
+        assert_eq!(link_speed(&dir), Some(250_000_000.0));
+    }
+
+    #[test]
+    fn a_link_that_reports_no_rate_is_left_out_rather_than_guessed() {
+        // A link that is down answers -1, and one with no fixed rate fails the
+        // read outright. Neither is a number to divide by.
+        let dir = a_class_net("down", &[("eth0", "-1\n", true), ("eth1", "\n", true)]);
+        assert_eq!(link_speed(&dir), None);
+    }
+
+    #[test]
+    fn a_machine_with_no_sysfs_reports_no_link_speed() {
+        assert_eq!(
+            link_speed(std::path::Path::new("/nonexistent/class/net")),
+            None
+        );
+    }
+
+    #[test]
+    fn the_task_ceiling_comes_from_the_kernel_and_is_absent_when_it_cannot_be_read() {
+        let dir = std::env::temp_dir().join(format!("hs-pidmax-{}", std::process::id()));
+        fs::create_dir_all(dir.join("sys/kernel")).unwrap();
+        fs::write(dir.join("sys/kernel/pid_max"), "32768\n").unwrap();
+        assert_eq!(pid_max(&dir), Some(32768.0));
+        assert_eq!(pid_max(std::path::Path::new("/nonexistent")), None);
     }
 }

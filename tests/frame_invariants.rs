@@ -310,6 +310,49 @@ fn the_invariants_hold_on_a_narrow_and_on_a_wide_terminal() {
     }
 }
 
+/// Colour is the one thing drawn text cannot carry, so the reading that
+/// decides it gets a channel of its own: `--dump-style` prints the frame and
+/// then a map of the same shape, one character per cell. Without it neither
+/// the linter nor a live check can tell a screen that reads correctly from one
+/// painted at random (D-42).
+#[test]
+fn the_style_map_covers_the_frame_cell_for_cell() {
+    let f = Fixture::new("stylemap");
+    build(&f);
+    let out = run(&[
+        "--proc-root",
+        f.proc_root().to_str().unwrap(),
+        "--cgroup-root",
+        f.cgroup_root().to_str().unwrap(),
+        "--docker-socket",
+        "none",
+        "--dump-style",
+        "1",
+        "--size",
+        "100x30",
+        "--tick",
+        "50",
+    ]);
+    let unit = &frames(&out)[0];
+    assert_eq!(unit.len(), 60, "a frame of 30 lines and a map of 30");
+    let (text, map) = unit.split_at(30);
+    for (i, (t, m)) in text.iter().zip(map.iter()).enumerate() {
+        assert_eq!(width(t), 100, "line {i} of the frame");
+        // The map is one character per CELL, so a name of Han letters makes
+        // the map longer in characters than the text and exactly as wide.
+        assert_eq!(m.chars().count(), 100, "line {i} of the map");
+        assert!(
+            m.chars().all(|c| ".cuasmb".contains(c)),
+            "line {i} of the map holds a role nobody named: {m:?}"
+        );
+    }
+    // The selected row is the first of the table, and it is on the map.
+    assert!(
+        map.iter().any(|m| m.contains('s')),
+        "the ground of the selected row is not on the map"
+    );
+}
+
 #[test]
 fn the_self_row_stays_first_under_each_of_the_four_sortings() {
     let f = Fixture::new("selffirst");
@@ -318,7 +361,9 @@ fn the_self_row_stays_first_under_each_of_the_four_sortings() {
         let frames = scenario(&f, key, "100x30");
         let last = frames.last().unwrap();
         let rows: Vec<&String> = last[7..last.len() - 4].iter().collect();
-        let first = rows[0].chars().skip(1).take(28).collect::<String>();
+        // One cell for the border and one for the flag the row carries, then
+        // the name column proper (D-42).
+        let first = rows[0].chars().skip(2).take(27).collect::<String>();
         assert!(
             first.trim() == "(self)",
             "under sort {key} the first row is {first:?}"

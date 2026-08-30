@@ -5,7 +5,7 @@
 //! changes between two runs over the same snapshot is printed, so the FR-17
 //! acceptance - two runs, one identical dump - holds.
 
-use crate::model::{Metrics, Node, Snapshot};
+use crate::model::{Limits, Metrics, Mode, Node, Readings, Snapshot};
 
 pub fn model_json(snap: &Snapshot, tick_ms: u64) -> String {
     let mut out = String::new();
@@ -38,14 +38,25 @@ pub fn model_json(snap: &Snapshot, tick_ms: u64) -> String {
         num(h.load[2])
     ));
     out.push_str("  },\n");
+    // The denominators every reading was taken against. A reading cannot be
+    // checked without them, and they are what separates a threshold that fired
+    // on the right row from one that fired on the wrong machine (D-42).
+    let l = &snap.limits;
+    out.push_str("  \"limits\": {\n");
+    out.push_str(&format!("    \"cores\": {},\n", num(l.cores)));
+    out.push_str(&format!("    \"mem_total\": {},\n", num(l.mem_total)));
+    out.push_str(&format!("    \"swap_total\": {},\n", num(l.swap_total)));
+    out.push_str(&format!("    \"pid_max\": {},\n", opt(l.pid_max)));
+    out.push_str(&format!("    \"link_speed\": {}\n", opt(l.link_speed)));
+    out.push_str("  },\n");
     out.push_str("  \"tree\": ");
-    node_json(&snap.root, 1, &mut out);
+    node_json(&snap.root, 1, &snap.limits, &mut out);
     out.push('\n');
     out.push_str("}\n");
     out
 }
 
-fn node_json(node: &Node, depth: usize, out: &mut String) {
+fn node_json(node: &Node, depth: usize, limits: &Limits, out: &mut String) {
     let pad = "  ".repeat(depth + 1);
     let inner = "  ".repeat(depth + 2);
     out.push_str("{\n");
@@ -91,13 +102,18 @@ fn node_json(node: &Node, depth: usize, out: &mut String) {
     out.push_str(&format!("{pad}\"avg\": "));
     metrics_json(&node.avg, out);
     out.push_str(",\n");
+    // The instant figures, because those are what the screen opens on. Disk
+    // has no field here, exactly as it has none in the type (D-42).
+    out.push_str(&format!("{pad}\"reading\": "));
+    readings_json(&node.readings(limits, Mode::Instant), out);
+    out.push_str(",\n");
     if node.children.is_empty() {
         out.push_str(&format!("{pad}\"children\": []\n"));
     } else {
         out.push_str(&format!("{pad}\"children\": [\n"));
         for (i, c) in node.children.iter().enumerate() {
             out.push_str(&inner);
-            node_json(c, depth + 2, out);
+            node_json(c, depth + 2, limits, out);
             if i + 1 < node.children.len() {
                 out.push(',');
             }
@@ -106,6 +122,19 @@ fn node_json(node: &Node, depth: usize, out: &mut String) {
         out.push_str(&format!("{pad}]\n"));
     }
     out.push_str(&format!("{}}}", "  ".repeat(depth)));
+}
+
+fn readings_json(r: &Readings, out: &mut String) {
+    out.push_str(&format!(
+        "{{\"cpu\": {}, \"mem\": {}, \"swap\": {}, \"tasks\": {}, \"rx\": {}, \"tx\": {}, \"flag\": {}}}",
+        string(r.cpu.label()),
+        string(r.mem.label()),
+        string(r.swap.label()),
+        string(r.tasks.label()),
+        string(r.rx.label()),
+        string(r.tx.label()),
+        string(r.flag.label())
+    ));
 }
 
 fn metrics_json(m: &Metrics, out: &mut String) {
@@ -180,6 +209,40 @@ mod tests {
         let text = model_json(&snap, 1000);
         assert!(text.contains("\"rx\": null"), "{text}");
         assert!(text.contains("\"cpu\": 0.5"), "{text}");
+    }
+
+    /// The comparison against the oracle runs over this text, so a threshold
+    /// that fires on the wrong row has to be visible here rather than only on
+    /// screen (D-42). The denominators go with it: a reading cannot be checked
+    /// without the whole it is a share of.
+    #[test]
+    fn the_dump_carries_the_reading_and_what_it_was_read_against() {
+        use crate::model::Limits;
+        let mut snap = Snapshot::empty();
+        snap.limits = Limits {
+            cores: 4.0,
+            mem_total: 8.0 * 1024.0 * 1024.0 * 1024.0,
+            swap_total: 0.0,
+            pid_max: Some(32768.0),
+            link_speed: None,
+        };
+        let mut n = Node::new("p:1", "a", Kind::Process);
+        n.instant = Metrics {
+            cpu: Some(2.5),
+            ..Metrics::default()
+        };
+        n.detail.state = Some('Z');
+        snap.root.children.push(n);
+        let text = model_json(&snap, 1000);
+        assert!(text.contains("\"cpu\": \"alarm\""), "{text}");
+        assert!(text.contains("\"flag\": \"alarm\""), "{text}");
+        assert!(
+            !text.contains("\"rd\": \"calm\""),
+            "disk has no reading: {text}"
+        );
+        assert!(text.contains("\"pid_max\": 32768"), "{text}");
+        assert!(text.contains("\"link_speed\": null"), "{text}");
+        assert!(crate::enrich::json::parse(&text).is_some(), "{text}");
     }
 
     #[test]

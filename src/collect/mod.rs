@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::enrich::Enrichment;
-use crate::model::{Detail, HostSummary, Kind, Metrics, Node, Owner, OwnerKind, Snapshot};
+use crate::model::{Detail, HostSummary, Kind, Limits, Metrics, Node, Owner, OwnerKind, Snapshot};
 use crate::sample::Sampler;
 use crate::util::clean;
 
@@ -30,6 +30,10 @@ pub struct Collector {
     boot_time: f64,
     cost: TickCost,
     cmd_cache: procs::CmdCache,
+    /// The two denominators that do not change while the tool runs, so they
+    /// are read once rather than every tick (D-42).
+    pid_max: Option<f64>,
+    link_speed: Option<f64>,
 }
 
 /// What the last tick cost, split by source. Section 6 puts a budget on the
@@ -44,6 +48,19 @@ pub struct TickCost {
 impl Collector {
     pub fn new(cgroup_root: PathBuf, proc_root: PathBuf, now: f64, etc_passwd: bool) -> Collector {
         let self_netns = host::netns_ino(&proc_root, std::process::id() as i32);
+        let pid_max = host::pid_max(&proc_root);
+        // `/sys/class/net` sits beside `/sys/fs/cgroup` rather than under
+        // `/proc`, and a captured snapshot lays the two out the same way, so
+        // the interface set is found from the cgroup root instead of being
+        // hard-coded. Without that, a run over a snapshot would read the links
+        // of whatever machine happened to be running it.
+        let link_speed = host::link_speed(
+            &cgroup_root
+                .parent()
+                .and_then(|p| p.parent())
+                .unwrap_or(Path::new("/sys"))
+                .join("class/net"),
+        );
         Collector {
             cgroup_root,
             proc_root,
@@ -63,6 +80,8 @@ impl Collector {
             boot_time: 0.0,
             cost: TickCost::default(),
             cmd_cache: procs::CmdCache::new(),
+            pid_max,
+            link_speed,
         }
     }
 
@@ -99,6 +118,13 @@ impl Collector {
         self.sampler.sweep();
         Snapshot {
             root,
+            limits: Limits {
+                cores: summary.cores,
+                mem_total: summary.mem_total,
+                swap_total: summary.swap_total,
+                pid_max: self.pid_max,
+                link_speed: self.link_speed,
+            },
             host: summary,
             interval: self.sampler.interval(),
             window: self.sampler.window(),
@@ -349,6 +375,7 @@ impl Collector {
                     .cloned()
                     .unwrap_or_else(|| s.uid.to_string()),
             ),
+            state: Some(s.state),
             cmdline: s.cmdline.as_deref().map(clean),
             threads: Some(s.threads),
             started: Some(crate::enrich::stamp(
