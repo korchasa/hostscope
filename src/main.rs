@@ -77,6 +77,7 @@ fn run(options: Options) -> Result<(), String> {
         options.cgroup_root.clone(),
         options.proc_root.clone(),
         now_secs(),
+        options.etc_passwd,
     );
 
     // The command line out-votes the environment, and the environment

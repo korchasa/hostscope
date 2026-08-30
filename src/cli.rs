@@ -22,6 +22,8 @@ usage: hostscope [options]
   --keys \"Right a Esc\"    run a key program and stop
   --size WxH              frame size for --dump-frame (default 100x30)
   --log FILE              write the log to FILE; never to the terminal
+  --no-etc-passwd         do not read /etc/passwd; the OWNER column and the
+                          card then show the uid instead of the login name
   --theme NAME            the palette to open in: classic, panel, gruvbox,
                           solarized, nord, dracula, tokyo-night, catppuccin
                           (t walks them while running; HOSTSCOPE_THEME sets
@@ -31,6 +33,11 @@ usage: hostscope [options]
 
 Dumps go to standard output. FR-10 forbids writing outside the log named on
 the command line, and a verification hook is no reason to make an exception.
+
+Besides /proc and /sys/fs/cgroup the application opens one more file for data:
+/etc/passwd, once at start, to turn the uid of a login session into the name
+the OWNER column shows. It keeps nothing from that file but the number and the
+name. --no-etc-passwd leaves it unopened, and the column then shows the number.
 
 The tree is the process forest of the host: every row is a process, and it
 stands under the process that started it. What runs a process - a container, a
@@ -92,6 +99,11 @@ pub struct Options {
     pub keys: Vec<Key>,
     pub size: (u16, u16),
     pub log: Option<PathBuf>,
+    /// Whether the uid of a login session is turned into a login name, which
+    /// takes reading `/etc/passwd` - the one file for data outside `/proc` and
+    /// `/sys`. On by default, because the kernel offers no other source for the
+    /// name the `OWNER` column is required to carry (D-26, D-41).
+    pub etc_passwd: bool,
     /// The palette to open in, when the command line names one. `None` leaves
     /// the choice to `HOSTSCOPE_THEME` and then to the first theme: a flag
     /// that is not given must not out-vote the environment.
@@ -111,6 +123,7 @@ impl Default for Options {
             size: (100, 30),
             log: None,
             theme: None,
+            etc_passwd: true,
         }
     }
 }
@@ -169,6 +182,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> 
                 );
             }
             "--log" => o.log = Some(PathBuf::from(value("--log")?)),
+            "--no-etc-passwd" => o.etc_passwd = false,
             "--theme" => {
                 let v = value("--theme")?;
                 o.theme = Some(crate::theme::index_of(&v).ok_or_else(|| {
@@ -228,6 +242,15 @@ mod tests {
         assert!(parse(["--nope".to_string()]).is_err());
         assert!(parse(["--tick".to_string()]).is_err());
         assert!(parse(["--dump-model".to_string(), "yaml".to_string()]).is_err());
+    }
+
+    #[test]
+    fn the_user_table_is_read_unless_the_command_line_says_otherwise() {
+        // The name in the `OWNER` column has no other source, so the file is
+        // read by default; the flag is for a host where the one file this tool
+        // opens outside `/proc` and `/sys` is one file too many (D-41).
+        assert!(opts(&[]).etc_passwd);
+        assert!(!opts(&["--no-etc-passwd"]).etc_passwd);
     }
 
     #[test]

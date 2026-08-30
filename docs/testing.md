@@ -170,6 +170,10 @@ They are now in the requirements as FR-17 (operator decision
   tests with no live host involved.
 - `--docker-socket PATH|none` - substituting and disabling the socket,
   the acceptance of FR-3 and D-13.
+- `--no-etc-passwd` - leave the account database unopened, so the `OWNER`
+  column shows the uid of a login session instead of the login name
+  (D-41). Every test passes it: a snapshot has to decide the whole model,
+  and `/etc/passwd` belongs to the machine the test runs on.
 - `--dump-model json` - print the tree model as numbers to standard
   output and exit. Comparison against the oracle runs over this output,
   not over screen text.
@@ -208,6 +212,13 @@ application reads and of `cgroup.procs` across the hierarchy is written
 out as a fixture, and the application is started with `--proc-root` and
 `--cgroup-root`. Deterministic, runs on the Mac and in CI. Covers FR-1,
 FR-5, FR-6, FR-13, FR-14, FR-15, FR-20.
+
+Every run also passes `--no-etc-passwd`. Without it the model is not the
+snapshot's alone: the name of a login session comes from the account
+database of whatever machine the suite happens to be on. The first CI run
+found this on 2026-08-30 - a test that had read `1000` on the developing
+Mac, where that uid belongs to nobody, read `packer` on the Linux runner,
+where it belongs to somebody (D-41).
 
 The fixtures are built in code (`tests/support/mod.rs`) rather than
 stored as files: what has to be checked is a shape - which process has
@@ -305,10 +316,25 @@ V7. **Security and read-only.** FR-9: start a process with the variable
 process, and search for the string in every frame and in the log -
 neither the value nor the name `HS_CANARY` may appear, because the
 environment is not read at all. The same `strace` run proves it from the
-other side: no `openat` of a `/proc/<pid>/environ`. FR-10: `strace -f -e
-trace=execve,openat -o /tmp/hostscope/strace.log` around the whole run,
+other side: no open of a `/proc/<pid>/environ`. FR-10: `strace -f -e
+trace=%file -o /tmp/hostscope/strace.log` around the whole run,
 then check that there was exactly one `execve` - our own - and that no
-`openat` for writing went outside the log named on the command line.
+open for writing went outside the log named on the command line.
+
+`%file` and not a list of syscall names. The trace named `openat` alone
+until 2026-08-30, and the binary is linked against musl, which on x86_64
+calls `open`: the trace of a run that read several hundred files held two
+lines, the `execve` and the exit, and every count taken from it was zero
+out of zero. Three checks had been passing on an empty trace. The section
+now counts the opens under `/proc` first and fails when there are too few
+of them, so a trace that cannot show what was opened says so instead of
+reading like a pass.
+
+FR-10a: every path the trace shows opened is under `/proc` or
+`/sys/fs/cgroup` or is `/etc/passwd`. D-41: a second run with
+`--no-etc-passwd` opens no `/etc/passwd`, and the section fails when the
+first run did not open it either - a comparison where neither side has
+the file proves nothing.
 
 ## 6. The procedure for a single run
 
@@ -601,15 +627,16 @@ linter catches layout, not meaning.
 | FR-6 | V1 over a snapshot with 200 nodes, induced state "many nodes"; V4: a filter typed, kept and dropped - the path line names it and counts what it left, `Esc` gives the level back; V4: the bar stands beside the sorted column (D-27) |
 | FR-7 | V3: pause, two consecutive frames match, after release they do not; V4: `-` and `+` walk the interval to both ends of the list and the key line says which one is on |
 | FR-8 | Induced state "without root" with a separate user |
-| FR-9 | V7: a canary in the environment, searched across frames and log; no `environ` in the `openat` trace |
-| FR-10 | V7: `strace` on `execve` and `openat`, plus the build-time check |
+| FR-9 | V7: a canary in the environment, searched across frames and log; no `environ` in the file-syscall trace |
+| FR-10 | V7: `strace -e trace=%file`, plus the build-time check |
+| FR-10a | V7: every path opened in the file-syscall trace of a live run is under `/proc` or `/sys/fs/cgroup` or is `/etc/passwd`, and a second run with `--no-etc-passwd` opens none of the three |
 | FR-11 | Induced state "container network"; for host processes the unavailability marker; the host rates against netlink (V2) |
 | FR-12 | Invariant 2 on every frame, induced state "non-ASCII name" (FR-4 was withdrawn by D-17) |
 | FR-13 | Induced state "spike against steady load", two snapshots with a known pause |
 | FR-14 | Invariants 5 and 6, induced states "memory" and "disappearing processes" |
 | FR-15 | Step 3 of the procedure, a snapshot with a non-zero base |
 | FR-16 | Withdrawn by D-24 |
-| FR-17 | Two runs over one snapshot give an identical dump; the `openat` trace |
+| FR-17 | Two runs over one snapshot give an identical dump; the file-syscall trace |
 | FR-18 | V4: the list scenario `v / r e d i s Enter` over the snapshot, invariants 1-13; the interface walk of the live check presses `v` |
 | FR-19 | Withdrawn by D-24 |
 | FR-20 | V1 over the three environment shapes: every container named on every process it runs, the filter finding those processes by the container name and by the kind of owner; every owner the model names is on a drawn row |
@@ -627,6 +654,7 @@ linter catches layout, not meaning.
 | D-38 | A unit test over the timer: the first call is not due, a call before the span is not due, and a call after it is due once. On the host, `tmux pipe-pane` over 20 seconds counts the bytes and the full clears at the three second and the one second interval, and section 6a carries what it counted |
 | D-39 | A unit test over the renderer draws the header twice, with the same host at two magnitudes of every figure, and demands that `MEM`, `SWAP` and `LOAD` land on the same cell both times. Invariant 16 of `scripts/frame-lint.py` holds the same across the frames of every captured run |
 | D-40 | The `measurements` section reads `/proc/meminfo` and holds the host to 4 percent of one core where nothing is in swap and to 5 where the swap column is drawn, printing which of the two it applied. Confirmed on both rigs on 2026-08-29: 2.40 percent against the four on the rig that had swapped nothing, 3.66 against the five on the one that had |
+| D-41 | A unit test over the command line holds the default on and the flag off. The `security` section traces the file syscalls twice: `/etc/passwd` is opened by the default run and by no run that passes `--no-etc-passwd`, and the section fails when the default run did not open it either, because then the comparison proves nothing |
 | Section 6 | Section 9 of this document |
 
 ## 14. Link to the requirements

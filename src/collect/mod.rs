@@ -42,13 +42,20 @@ pub struct TickCost {
 }
 
 impl Collector {
-    pub fn new(cgroup_root: PathBuf, proc_root: PathBuf, now: f64) -> Collector {
+    pub fn new(cgroup_root: PathBuf, proc_root: PathBuf, now: f64, etc_passwd: bool) -> Collector {
         let self_netns = host::netns_ino(&proc_root, std::process::id() as i32);
         Collector {
             cgroup_root,
             proc_root,
             sampler: Sampler::new(now),
-            users: procs::user_table(),
+            // Without the table every login session is a number on the screen.
+            // That is a worse reading and not a wrong one, which is why the
+            // choice belongs to whoever runs the tool (D-41).
+            users: if etc_passwd {
+                procs::user_table()
+            } else {
+                std::collections::HashMap::new()
+            },
             self_netns,
             history: Vec::new(),
             ebpf: false,

@@ -410,7 +410,12 @@ fn write_file(path: &Path, text: &str) {
 
 /// Runs the built binary and returns its standard output.
 pub fn run(args: &[&str]) -> String {
+    // A snapshot must decide the whole model. `/etc/passwd` belongs to the
+    // machine the test happens to run on, and reading it made one test pass on
+    // a Mac, where uid 1000 is nobody, and fail on Linux, where it is somebody
+    // (D-41). The flag is how a test says the snapshot is all there is.
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_hostscope"))
+        .arg("--no-etc-passwd")
         .args(args)
         .output()
         .expect("the binary runs");

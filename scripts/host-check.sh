@@ -187,6 +187,18 @@ node_value() {
   printf '%s' "$1" | python3 "$DIR/model-query.py" node "$2" "$3" "$4"
 }
 
+# Every file name an `open`, `openat` or `openat2` actually returned a
+# descriptor for. Failed calls are left out: the application probes paths under
+# `/proc` that come and go, and an attempt that got ENOENT opened nothing.
+opened_paths() {
+  # The path is the first quoted field of the call, whether the form is
+  # `open("/x", ...)` or `openat(AT_FDCWD, "/x", ...)` - the directory argument
+  # of the second form carries no quotes. Lines are filtered to the open calls
+  # first, so a `statx` of the same name is not counted as an open.
+  grep -E '(^|[^a-z_])(open|openat|openat2)\(' "$1" | grep -v '= -1' \
+    | sed -nE 's/[^"]*"([^"]*)".*/\1/p'
+}
+
 prepare() {
   part "1. preparation"
   # The frames of the run before this one go first. The linter runs early, and
@@ -731,7 +743,7 @@ print(out[0] if out else "")
 }
 
 security() {
-  part "7. security and read only (V7, FR-9, FR-10)"
+  part "7. security and read only (V7, FR-9, FR-10, FR-10a, D-41)"
   local canary="HS-CANARY-8f2a1c9e"
   sudo -n systemd-run --scope --slice=hs --unit=hs-canary -q \
     --setenv=HS_CANARY=$canary timeout 45 python3 -c 'import time; time.sleep(44)' hs-canary-load &
@@ -755,13 +767,30 @@ security() {
   fi
 
   rm -f "$DIR/strace.log"
-  sudo -n strace -f -e trace=execve,openat -o "$DIR/strace.log" \
+  # `%file` and not `openat`. The binary is linked against musl, and musl on
+  # x86_64 calls `open` rather than `openat`, so a filter naming `openat` alone
+  # matched nothing: on 2026-08-30 this trace held two lines - the `execve` and
+  # the exit - for a run that read several hundred files, and every count below
+  # was zero out of zero. `%file` is every syscall that takes a file name, so no
+  # future libc can empty the trace the same way.
+  sudo -n strace -f -e trace=%file -o "$DIR/strace.log" \
     "$BIN" --dump-frame 3 --tick 400 --size 100x30 >/dev/null 2>&1
-  local execs writes environ
+  local execs writes environ opened
   execs=$(grep -c 'execve(' "$DIR/strace.log")
-  writes=$(grep 'openat(' "$DIR/strace.log" | grep -c 'O_WRONLY\|O_RDWR\|O_CREAT')
-  environ=$(grep -c 'openat(.*/environ' "$DIR/strace.log")
-  echo "  execve calls: $execs   openat for writing: $writes   openat of environ: $environ"
+  opened=$(opened_paths "$DIR/strace.log" | grep -c '^/proc/')
+  writes=$(grep -E '\b(open|openat|openat2)\(' "$DIR/strace.log" \
+    | grep -c 'O_WRONLY\|O_RDWR\|O_CREAT')
+  environ=$(grep -cE '\b(open|openat|openat2)\(.*/environ' "$DIR/strace.log")
+  echo "  execve calls: $execs   files under /proc opened: $opened"
+  echo "  opened for writing: $writes   environ opened: $environ"
+  # The floor under everything else in this section. A trace that recorded no
+  # open at all makes each count below zero out of zero, which reads exactly
+  # like a pass.
+  if [ "$opened" -gt 100 ]; then
+    pass "the trace recorded $opened opens under /proc, so the counts below mean something"
+  else
+    fail "the trace recorded only $opened opens under /proc: it cannot show what was opened"
+  fi
   if [ "$execs" -le 1 ]; then
     pass "the application runs no external command (FR-10)"
   else
@@ -771,7 +800,8 @@ security() {
     pass "the application opened nothing for writing (FR-10)"
   else
     fail "the application opened $writes files for writing"
-    grep 'openat(' "$DIR/strace.log" | grep 'O_WRONLY\|O_RDWR\|O_CREAT' | head -3
+    grep -E '\b(open|openat|openat2)\(' "$DIR/strace.log" \
+      | grep 'O_WRONLY\|O_RDWR\|O_CREAT' | head -3
   fi
   # FR-9 as a syscall fact rather than as a screen fact: the file that holds
   # the tokens of every service on the host is never opened.
@@ -779,7 +809,35 @@ security() {
     pass "the application never opened a /proc/<pid>/environ (FR-9)"
   else
     fail "the application opened environ $environ times"
-    grep 'openat(.*/environ' "$DIR/strace.log" | head -3
+    grep -E '\b(open|openat|openat2)\(.*/environ' "$DIR/strace.log" | head -3
+  fi
+
+  # FR-10a as the same syscall fact: the whole surface of files opened for data,
+  # not just the one file FR-9 forbids. A statically linked binary opens what the
+  # application asked for and nothing else, so anything here that is not /proc,
+  # /sys/fs/cgroup or the account database is a read nobody declared.
+  local outside
+  outside=$(opened_paths "$DIR/strace.log" \
+    | grep -vE '^/proc($|/)|^/sys/fs/cgroup($|/)|^/etc/passwd$' | sort -u)
+  if [ -z "$outside" ]; then
+    pass "nothing was opened outside /proc, /sys/fs/cgroup and /etc/passwd (FR-10a)"
+  else
+    fail "files were opened that the requirement does not name (FR-10a)"
+    echo "$outside" | head -5 | sed 's/^/    /'
+  fi
+
+  # D-41: the one file outside the two trees can be refused, and the check says
+  # so only when it saw the file opened without the flag. A run where it was
+  # never opened at all would pass the first half and prove nothing.
+  rm -f "$DIR/strace-nopasswd.log"
+  sudo -n strace -f -e trace=%file -o "$DIR/strace-nopasswd.log" \
+    "$BIN" --no-etc-passwd --dump-frame 2 --tick 400 --size 100x30 >/dev/null 2>&1
+  if opened_paths "$DIR/strace-nopasswd.log" | grep -qx '/etc/passwd'; then
+    fail "--no-etc-passwd opened the account database anyway (D-41)"
+  elif ! opened_paths "$DIR/strace.log" | grep -qx '/etc/passwd'; then
+    fail "/etc/passwd was not opened even by default, so this check proves nothing (D-41)"
+  else
+    pass "/etc/passwd is opened by default and left alone with --no-etc-passwd (D-41)"
   fi
 }
 

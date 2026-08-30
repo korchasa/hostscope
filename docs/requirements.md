@@ -218,7 +218,8 @@ question about resource usage, while reading the file at all is the one
 way this tool could leak a secret.
 Acceptance: a process is started with a variable holding a known secret;
 neither its value nor its name appears in any frame or log line, and an
-`openat` trace of a run over the live host shows no `environ` opened at
+trace of the file syscalls of a run over the live host shows no
+`environ` opened at
 all.
 
 FR-10. Read only. The application runs no external commands, writes
@@ -230,6 +231,19 @@ rather than desirable.
 Acceptance: the build fails if process-spawning calls
 (`std::process::Command`) appear in the code; checked by a dedicated
 build step.
+
+FR-10a. The files read for data are named. Besides `/proc` and
+`/sys/fs/cgroup` the application opens one more file: `/etc/passwd`, once
+at start, to turn the uid of a login session into the name the `OWNER`
+column is required to carry (D-26). It keeps the uid and the login name
+and nothing else from that file - not the home directory, not the shell,
+not the comment field. `--no-etc-passwd` leaves it unopened, and the
+column then shows the uid (D-41). Nothing else outside `/proc` and
+`/sys/fs/cgroup` is opened for data.
+Acceptance: a trace of the file syscalls of a live run names
+`/etc/passwd` and no
+other file outside `/proc` and `/sys/fs/cgroup`; the same run with
+`--no-etc-passwd` names none at all.
 
 FR-11. Network is shown on every level (operator decision 2026-08-14).
 cgroup v2 has no network counters: the host has the controllers
@@ -375,7 +389,7 @@ outside the log named on the command line, and a verification hook is no
 reason to make an exception.
 Acceptance: two runs with `--cgroup-root` over the same snapshot produce
 an identical `--dump-model json`; `--dump-frame` works with no terminal,
-writing to a file; an `openat` trace of a run with any set of hooks
+writing to a file; a trace of the file syscalls of a run with any set of hooks
 shows no write anywhere except standard output and the file from
 `--log`.
 
@@ -933,7 +947,7 @@ Checked on the Docker rig on 2026-08-14 with the full `host-check.sh`: 27
 checks passed and one failed. The three sections that cover this
 decision all passed. The environment is not read - the canary process
 put neither the value nor the name `HS_CANARY` on any screen or in the
-log, and the `openat` trace of a live run shows no `/proc/<pid>/environ`
+log, and the file-syscall trace of a live run shows no `/proc/<pid>/environ`
 opened at all. A process argument outside ASCII reaches the frame in its
 own script, and the frame linter passes on those frames, so the cell
 arithmetic holds where the escaping used to.
@@ -1597,6 +1611,36 @@ budget of section 6 on a host that had swapped.
   is written for. Section 6a records 9.3 percent on a machine of 1418
   processes with all of its swap in use, and that tree is four times the
   one every figure here is stated on.
+
+D-41. `/etc/passwd` is read, said so, and can be refused. DECIDED
+2026-08-30 by the operator, after the first CI run failed a test that had
+passed on the developing machine for a fortnight.
+
+- The kernel hands out no names. A login session reaches the collector as
+  `user.slice/user-1000.slice` and `/proc/<pid>/status` carries `Uid:` as
+  a number, so the word D-26 requires in the `OWNER` column has exactly
+  one source on a Unix machine: the account database. Reading it once at
+  start costs nothing measurable and never enters the cost of a tick.
+- Rejected: `getpwuid` of libc. It reads the same data through NSS, which
+  on a host configured for LDAP or SSSD turns a name lookup into a
+  network call. An application that promises no port and no daemon may
+  not open a socket to spell a word.
+- Rejected: dropping the resolution and showing the uid always. It is the
+  only choice that removes the read outright, and it takes the one word
+  on the row that a human recognises without a second command.
+- The read is now declared in FR-10a rather than living in a comment on
+  the function. A stated surface that matches the real one is the whole
+  of what FR-9 and FR-10 are worth; an undeclared read of the account
+  database is the kind of thing an auditor finds rather than reads.
+- `--no-etc-passwd` refuses it. The default reads the file, because the
+  name is the better screen; a host where the one file outside `/proc`
+  and `/sys` is one too many gets the uid instead. Nothing else about the
+  frame changes.
+- The tests pass the flag on every run. A snapshot has to decide the
+  whole model, and `/etc/passwd` belongs to the machine the test happens
+  to be on: the same test read `1000` on a Mac, where that uid is nobody,
+  and `packer` on the Linux runner, where it is somebody. That is not a
+  test of the application at all.
 
 ## 10. Definition of done
 

@@ -35,6 +35,8 @@ usage: hostscope [options]
   --keys "Right a Esc"    run a key program and stop
   --size WxH              frame size for --dump-frame (default 100x30)
   --log FILE              write the log to FILE; never to the terminal
+  --no-etc-passwd         do not read /etc/passwd; the OWNER column and the
+                          card then show the uid instead of the login name
   --theme NAME            the palette to open in: classic, panel, gruvbox,
                           solarized, nord, dracula, tokyo-night, catppuccin
                           (t walks them while running; HOSTSCOPE_THEME sets
@@ -44,6 +46,11 @@ usage: hostscope [options]
 
 Dumps go to standard output. FR-10 forbids writing outside the log named on
 the command line, and a verification hook is no reason to make an exception.
+
+Besides /proc and /sys/fs/cgroup the application opens one more file for data:
+/etc/passwd, once at start, to turn the uid of a login session into the name
+the OWNER column shows. It keeps nothing from that file but the number and the
+name. --no-etc-passwd leaves it unopened, and the column then shows the number.
 
 The tree is the process forest of the host: every row is a process, and it
 stands under the process that started it. What runs a process - a container, a
