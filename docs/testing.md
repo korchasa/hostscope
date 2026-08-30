@@ -179,6 +179,14 @@ They are now in the requirements as FR-17 (operator decision
   not over screen text.
 - `--dump-frame N` - render N frames as text to standard output and
   exit. Gives a layout check with no terminal and no `tmux`.
+- `--dump-style N` - the same N frames, each followed by a map of the
+  same shape naming the role of every cell: `.` plain, `c` calm, `u`
+  unusual, `a` alarm, `b` a cell of a bar or a sparkline, `s` the ground
+  of the selected row, `m` a cell the filter matched. Text cannot say what colour it was drawn in, so without
+  this hook the whole linting pipeline is blind to the reading FR-21
+  mandates. Every walk of the live check runs through it, and the map
+  follows the last line of its frame, so a check that reads a frame by
+  line number or by grep never sees the map.
 - `--keys "Right Right a Escape"` - run a key program and stop. A
   scenario becomes a single command.
 - `--tick MS` - a fixed collection tick, so that the averaging window is
@@ -421,6 +429,20 @@ Every invariant is checked on any frame and refers to a requirement.
     This is the one invariant read across frames rather than inside one,
     because a header that moves can only be seen by comparing two of
     them (D-39).
+17. The style map covers the frame cell for cell: as many lines, and each
+    line as many characters as its frame line takes cells. A map that
+    does not line up says nothing about the colours it claims to describe
+    (FR-21, D-42). Checked only on a frame captured with `--dump-style`;
+    a plain frame carries no map and skips this.
+18. How loud the screen was: the linter counts the cells that read alarm
+    and prints the total. This is a report and not a failure on its own -
+    a ceiling fitted to two rigs cannot tell a palette that is too loud
+    from a host that is genuinely in trouble, and the second is what this
+    tool exists for. Where the right answer is known in advance - the
+    induced states the live check raises itself - the section gives
+    `--alarm-min N` and the linter fails below it. `--alarm-min` with no
+    map anywhere is itself a failure, so a section cannot claim the floor
+    while capturing plain frames.
 
 ## 8. Induced states
 
@@ -443,6 +465,14 @@ sudo systemd-run --scope --slice=hs -p CPUQuota=50% --unit=hs-steady -q \
   `hs-steady` with a 20 percent quota runs all the time, `hs-spike` with
   100 percent lives for 3 seconds. In instant mode the spike comes
   first, in average mode the steady load does.
+- **A figure the reading must call alarm** - the check for FR-21: a
+  scope with `CPUQuota=250%` and three busy processes burns more than
+  one core, and the frames captured with `--dump-style` are linted with
+  `--alarm-min 1`. Every other state this check raises reads unusual at
+  most, so without this one invariant 18 counts zero out of zero on a
+  healthy host, which reads exactly like a pass. Measured on the
+  reference host on 2026-08-30: 11 alarm cells under the load, 0 over
+  the 42 mapped frames of an ordinary run.
 - **Memory** - `-p MemoryMax=200M` and a script holding 150 MB: the
   check that the row shows the resident memory of the process and that
   the difference from the children total went into `(self)` (FR-14).
@@ -517,24 +547,35 @@ files. Settled by D-40: the budget carries two numbers now, 4 percent
 where nothing is in swap and 5 where the column is drawn, and the check
 reads `/proc/meminfo` to know which of them it is holding the host to.
 
-**The last full run, on the Kubernetes rig, 2026-08-30.** 42 checks
-passed, none failed, one skipped, in 134 seconds. It is the first run
-where the security section can fail: the trace is `%file` now and records
-2041 opens under `/proc` where the old filter recorded none, so the three
-counts taken from it stopped being zero out of zero (V7). The account
-database is opened once by the default run and by no run that passes
-`--no-etc-passwd` (D-41), and nothing at all is opened outside `/proc`,
-`/sys/fs/cgroup` and that one file (FR-10a).
+**The last full run, on the Kubernetes rig, 2026-08-30.** 43 checks
+passed, none failed, one skipped. It is the first run that can see the
+colour of the screen: 42 of the 45 captured frames carry a style map, the
+linter checks that every map covers its frame cell for cell, and it
+counts how loud each screen was (FR-21, invariants 17 and 18). Over an
+ordinary run it counted 0 alarm cells; under the induced state raised for
+this - three busy processes in a scope with `CPUQuota=250%` - it counted
+11, which is what says the reading reaches the screen at all rather than
+being switched off. The run was repeated the same day with the way-down
+glyph of D-44 in place and gave the same counts: the rows the induced
+state marks are leaves, which carry their reading themselves.
 
-The figures of that run: a 50 percent quota showed as 0.502 cores,
-collection took 41.2 ms at the 95th percentile and a redraw 0.9 ms, the
-first frame arrived after 15.9 ms, the application sent 1329 bytes per
-frame with five full screen clears in 20 seconds - the repaint of D-38 -
-and it spent 2.09 percent of one core and 1.1 MB on itself. The oracle
-agreed on 209 processes, sysstat and procps on 828 figures over 207 rows,
-netlink within two tenths of a percent on both directions, and the linter
-found nothing in 45 frames. That rig has swapped nothing, so it draws no
-swap column and pays nothing for it (D-35).
+The security section holds the widened surface: nothing is opened outside
+`/proc`, `/sys/fs/cgroup`, `/etc/passwd` and `/sys/class/net` (FR-10a),
+and the account database is opened once by the default run and by no run
+that passes `--no-etc-passwd` (D-41). The first run of the day failed
+exactly there, naming `/sys/class/net/eno1/speed` - a read the code had
+made before the requirement named it.
+
+The figures of that run: collection took 42.1 ms at the 95th percentile
+and a redraw 1.1 ms, the first frame arrived after 16.5 ms, the
+application sent 1341 bytes per frame with five full screen clears in 20
+seconds - the repaint of D-38 - and it spent 2.41 percent of one core and
+1.1 MB on itself, against the 4 percent D-40 allows a host that has
+swapped nothing. That rig draws no swap column and pays nothing for it
+(D-35). A 50 percent quota showed as 0.496 cores, the oracle agreed on
+205 processes, sysstat and procps on 820 figures over 205 rows with 4
+skipped as churn, and netlink came within a tenth of a percent on both
+directions.
 
 The skipped check is the container with a 120 character name: that rig
 runs containerd under microk8s and has no Docker to raise the state
@@ -632,7 +673,7 @@ linter catches layout, not meaning.
 | FR-8 | Induced state "without root" with a separate user |
 | FR-9 | V7: a canary in the environment, searched across frames and log; no `environ` in the file-syscall trace |
 | FR-10 | V7: `strace -e trace=%file`, plus the build-time check |
-| FR-10a | V7: every path opened in the file-syscall trace of a live run is under `/proc` or `/sys/fs/cgroup` or is `/etc/passwd`, and a second run with `--no-etc-passwd` opens none of the three |
+| FR-10a | V7: every path opened in the file-syscall trace of a live run is under `/proc` or `/sys/fs/cgroup` or is `/etc/passwd` or under `/sys/class/net`, and a second run with `--no-etc-passwd` does not open the account database |
 | FR-11 | Induced state "container network"; for host processes the unavailability marker; the host rates against netlink (V2) |
 | FR-12 | Invariant 2 on every frame, induced state "non-ASCII name" (FR-4 was withdrawn by D-17) |
 | FR-13 | Induced state "spike against steady load", two snapshots with a known pause |
@@ -642,6 +683,7 @@ linter catches layout, not meaning.
 | FR-17 | Two runs over one snapshot give an identical dump; the file-syscall trace |
 | FR-18 | V4: the list scenario `v / r e d i s Enter` over the snapshot, invariants 1-13; the interface walk of the live check presses `v` |
 | FR-19 | Withdrawn by D-24 |
+| FR-21 | Unit tests over `src/model.rs` fix every threshold and hold the host row to the thresholds of a machine rather than of a process; unit tests over `src/render.rs` hold the figure, the summary line, the card and the row glyph to the same reading, and hold the bar out of it; V4: invariant 17 over every frame the live check captures with `--dump-style`, and invariant 18 reporting how loud each screen was; V2: `--dump-model json` carries the reading of every row and the denominators it was read against |
 | FR-20 | V1 over the three environment shapes: every container named on every process it runs, the filter finding those processes by the container name and by the kind of owner; every owner the model names is on a drawn row |
 | D-25 | V1: a chain of single children is one row named for the whole chain, and its card names every link with its pid - over a chain of seven under a six-digit pid, at two widths, because a short chain and a three-digit pid are the two sizes at which a lost link stays invisible; V4: a card that cannot hold it says how many lines it hid, checked at the height that holds the card exactly and one line below it, because a guard on a comparison is wrong by one line at a time; V4: a pid too wide for its room is marked as cut, at four widths from 24 cells up, because a silent cut names another process; V3: the walk uses `Enter`, `BSpace` and `i` |
 | D-26 | Invariant 8: the `OWNER` column is demanded on every frame, no longer only where it happens to be drawn |
@@ -658,6 +700,9 @@ linter catches layout, not meaning.
 | D-39 | A unit test over the renderer draws the header twice, with the same host at two magnitudes of every figure, and demands that `MEM`, `SWAP` and `LOAD` land on the same cell both times. Invariant 16 of `scripts/frame-lint.py` holds the same across the frames of every captured run |
 | D-40 | The `measurements` section reads `/proc/meminfo` and holds the host to 4 percent of one core where nothing is in swap and to 5 where the swap column is drawn, printing which of the two it applied. Confirmed on both rigs on 2026-08-29: 2.40 percent against the four on the rig that had swapped nothing, 3.66 against the five on the one that had |
 | D-41 | A unit test over the command line holds the default on and the flag off. The `security` section traces the file syscalls twice: `/etc/passwd` is opened by the default run and by no run that passes `--no-etc-passwd`, and the section fails when the default run did not open it either, because then the comparison proves nothing |
+| D-42 | The heuristics stand as unit tests, one per denominator, so a threshold that moves shows up as a named failure rather than as a screen that looks different. The map of `--dump-style` is checked twice: `tests/frame_invariants.rs` demands that a frame over a snapshot carries a map of the right shape at all, and invariant 17 of `scripts/frame-lint.py` reads its second opinion over every frame of a live run. The `/sys/class/net` read is inside the surface FR-10a names, and the `security` section holds the trace to it |
+| D-43 | Unit tests over `src/model.rs`: the heuristics that fired come back named after the card row their figure stands on, with a reason carrying the figure of BOTH columns, the whole and the threshold; a figure that fires in one column only says which; a figure that did not move is written once; the swap reason says it is the subtree, not the process; a calm row returns none; and the worst of the reasons is the flag the row carries, which is what holds the reading and its sentence to one source. Unit tests over `src/render.rs`: the card of a marked row prints the block above its figures, and the card of a calm row prints no block at all |
+| D-44 | Unit tests over `src/model.rs`: a parent whose figures are entirely its children's is marked as the way down while the child that carries them is marked as the source; a parent that keeps a reading of its own after its children are subtracted stays the source; a state the kernel reports is always the row's own; and a calm row carries no mark. A unit test over `src/render.rs` reads the glyph off the drawn frame: the arrow on the parent of the top level, and the solid mark on the child one level down. The mark is computed where the row is built, in `src/app.rs`, because the row keeps a shallow copy of the node without the children the remainder is derived from |
 | Section 6 | Section 9 of this document |
 
 ## 14. Link to the requirements

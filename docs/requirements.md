@@ -238,12 +238,15 @@ at start, to turn the uid of a login session into the name the `OWNER`
 column is required to carry (D-26). It keeps the uid and the login name
 and nothing else from that file - not the home directory, not the shell,
 not the comment field. `--no-etc-passwd` leaves it unopened, and the
-column then shows the uid (D-41). Nothing else outside `/proc` and
-`/sys/fs/cgroup` is opened for data.
+column then shows the uid (D-41). It also reads
+`/sys/class/net/<if>/speed` and `/sys/class/net/<if>/device`, once at
+start, over the interfaces of the machine: that is the only measured
+whole the network figures of the host row can be read against (D-42).
+Nothing else outside `/proc` and `/sys/fs/cgroup` is opened for data.
 Acceptance: a trace of the file syscalls of a live run names
-`/etc/passwd` and no
-other file outside `/proc` and `/sys/fs/cgroup`; the same run with
-`--no-etc-passwd` names none at all.
+`/etc/passwd` and the two files under `/sys/class/net`, and no other
+file outside `/proc` and `/sys/fs/cgroup`; the same run with
+`--no-etc-passwd` does not name `/etc/passwd`.
 
 FR-11. Network is shown on every level (operator decision 2026-08-14).
 cgroup v2 has no network counters: the host has the controllers
@@ -484,6 +487,43 @@ systemd driver - every running container is named on every process it
 runs; a filter on the container name shows those processes and no
 others; a filter on the kind of an owner shows every row of that kind;
 every owner the model names is on a row of the drawn level.
+
+FR-21. The screen says which figures deserve a second look (operator
+decision 2026-08-30). Every figure carries a reading of itself - calm,
+unusual or alarm - and a row that carries a problem is marked in its
+name column, so the reader finds the row by running the eye down one
+column instead of reading five.
+
+- The reading is absolute. It is a share of what THIS machine can do, or
+  a state the kernel itself reports; it is never a comparison against the
+  other rows of the level and never against the row's own history. D-42
+  holds the criterion, every heuristic and its denominator.
+- Disk read and write carry no reading. Nothing readable says what the
+  device can do, and 50 MB a second is idle on one device and the ceiling
+  on another.
+- The bar beside the sorted column keeps reading the level, not the
+  machine (D-27, section 11). The two disagree by design: the bar says
+  large next to this level, the figure says large for this machine.
+- The mark on a row is a glyph in the name column, not a ground. The
+  ground is spoken for three times over - the selected row, the `(self)`
+  remainder and the filter match - and a glyph composes with all three.
+- The mark says whether the row is the source of the reading or only the
+  way down to it. Every figure is the sum of a subtree, so a reading on
+  one row would otherwise appear on every row above it up to the root.
+  `!` and `*` stand where the reading survives on the row's own
+  contribution, `↓` where it does not (D-44).
+- The card of a marked row says why. One line per heuristic that fired in
+  either column, named after the card row its figure stands on, with a
+  reason that names the figure of both columns, the whole it was read
+  against and the threshold it crossed. A row where everything reads calm
+  carries no such block (D-43).
+Acceptance: `--dump-style N` prints each frame with a map of the same
+shape naming the role of every cell; `scripts/frame-lint.py` checks that
+the map covers the frame cell for cell (invariant 17) and reports how
+many cells read alarm (invariant 18); the unit tests of `src/model.rs`
+fix every threshold and hold the reading and its reason to one source,
+`src/render.rs` holds the card block above the figures and absent on a
+calm row, and the live check names the firing rate measured on each rig.
 
 ## 6. Non-functional requirements
 
@@ -1642,6 +1682,240 @@ passed on the developing machine for a fortnight.
   and `packer` on the Linux runner, where it is somebody. That is not a
   test of the application at all.
 
+D-42. The screen says which figures deserve a second look. DECIDED
+2026-08-30 by the operator, who asked for dangerous and unusual values to
+be drawn in another colour, and for whole rows carrying a problem to be
+marked.
+
+- How section 2 is read. That section puts "alerts and thresholds" out of
+  scope, on the grounds that a monitoring stack does that. The operator
+  ruled on 2026-08-30 that the line excludes the monitoring function -
+  alert rules, notification, history, a stack that watches a fleet - and
+  not the colouring of a reading, which section 11 already mandates for
+  the bar and D-20 already settled as a reading rather than decoration.
+  This ruling is written down before the first line of the feature,
+  because a reading that makes two requirements agree is a reading and
+  not the author's intent.
+- The criterion every heuristic answers to. A figure is drawn apart from
+  calm only when the tool can name the whole it is a share of, and that
+  whole is a property of this machine rather than of the rows on screen;
+  or when the kernel itself reports a state, in which case there is no
+  threshold. A heuristic that cannot name a measured denominator is not
+  admitted.
+- What that criterion excludes, and why the exclusion is the answer
+  rather than a gap: disk read and write get no reading at all. Nothing
+  readable says what the device can do, and 50 MB a second is idle on one
+  device and the ceiling on another.
+- Rejected: a reading relative to the other rows of the level. On any
+  level somebody is the largest, so the colour would fire on a machine
+  with nothing wrong with it. The bar keeps that relative reading,
+  because a bar is a comparison by construction; a figure is not.
+- Rejected: a reading against the row's own recent history. It would
+  answer a different question - what changed - and it costs per-row state
+  and per-tick work that section 6 has no room for.
+- The heuristics that hold no threshold, because the kernel reports them
+  as facts. Field 3 of `/proc/<pid>/stat` is read for this and costs
+  nothing: it is the first field of the tail `parse_stat` already splits.
+  State `Z` flags the row alarm - the process is dead and its parent is
+  not reaping it. State `D` flags it unusual - the process is stuck in an
+  uninterruptible wait inside the kernel.
+- The heuristics that are a share of a measured whole. On a row: CPU
+  above 1.0 busy core is alarm and above 0.1 is unusual, strictly
+  greater, which is what the bar has always compared; memory from 25
+  percent of `MemTotal` is alarm and from 10 percent is unusual; swap
+  from 10 percent of `SwapTotal` is unusual and never alarm, because what
+  matters on a row is that this process is the one being swapped out;
+  tasks from 10 percent of `pid_max` is unusual.
+- The host row is read as a machine, not as a process. Two busy cores out
+  of four is half a machine and an ordinary afternoon, while the same
+  figure on a process is what this reading exists to catch. So the root
+  takes the thresholds of the summary line: CPU and memory from 90
+  percent of the whole are alarm and from 75 percent unusual, swap from
+  50 percent alarm and from 10 percent unusual, and load[0] per core from
+  2.0 alarm and from 1.0 unusual.
+- Network is read on the host row only, against the summed speed of the
+  PHYSICAL links - the interfaces carrying a `device` entry under
+  `/sys/class/net`. From 80 percent of that sum is alarm and from 50
+  percent unusual. Not the set `/proc/net/dev` sums: that one takes
+  `docker0` and one `veth` per container, so the denominator would grow
+  with the number of rows on screen. And not a per-container reading: a
+  container counts bytes inside its own namespace, and the speed of its
+  veth is nominal rather than real, so there is no honest reading there
+  and there is none.
+- No invented denominator. `speed` answers `-1` on a link that is down
+  and fails outright on an interface with no fixed rate, so only a
+  positive reading is summed; nothing summed means the network carries no
+  reading. The same for `pid_max`: unreadable means the tasks heuristic
+  does not fire.
+- The interface set is found beside the cgroup root rather than at a
+  fixed `/sys/class/net`. A captured snapshot lays `proc` and
+  `sys/fs/cgroup` out the same way a host does, and a run over a snapshot
+  that read the links of whatever machine happened to be running it would
+  not be a run over the snapshot at all - the same defect D-41 records
+  about `/etc/passwd`.
+- The bar is not routed through this reading. It reads the share of the
+  largest row of the level, section 11 makes that colour mandatory under
+  every sorting, and disk has no absolute reading at all - so routing it
+  through would draw every bar calm under a disk sorting. A reader who
+  sees a red bar beside a calm figure is seeing two different statements:
+  the bar says large next to this level, the figure says large for this
+  machine.
+- What the mark does not say: which figure it came from, or what that
+  figure was compared against. D-43 adds the block on the card that says
+  both.
+- The mark on a flagged row is a glyph in the leading cell of the name
+  column - `!` for alarm, `*` for unusual, `↓` where the reading only
+  passes through the row on its way up from a child (D-44), a space for
+  calm - drawn in the worst reading the row carries. A glyph and not a ground: the ground
+  is already spoken for three times over - the selected row, the `(self)`
+  remainder and the filter match - and a fourth claimant would have to
+  win or lose against each of them, while a glyph composes with all three
+  by construction.
+- Colour needs a channel of its own before anything can check it.
+  `--dump-frame` prints text, and text cannot say what colour it was
+  drawn in, so the whole frame-linting pipeline was blind to this feature
+  the day it was written. `--dump-style N` prints each frame followed by
+  a map of the same shape, one character per cell: `.` plain, `c` calm,
+  `u` unusual, `a` alarm, `b` a cell of a bar or a sparkline, `s` the
+  ground of the selected row, `m` a cell the filter matched. A reading
+  wins over a ground where a cell carries both, because the ground says
+  where the cursor is, which the text already shows. The bar takes a role
+  of its own although it is drawn in the same three colours: counting its
+  cells among the alarms would measure how many bars were long rather
+  than how loud the reading was. Measured on the reference host on
+  2026-08-30, before that separation, the linter read 230 alarm cells
+  over 42 frames of a screen where two rows out of 212 carried a
+  reading at all.
+- The reading lives in the model rather than in the renderer, so the
+  table, the card and `--dump-model json` read one value and cannot
+  disagree, and so the oracle comparison can see a threshold that fired
+  on the wrong row.
+- What the thresholds actually do, measured on the reference host on
+  2026-08-30 over `--dump-model json --dump-frame 3 --tick 800`: 6 cores,
+  16596729856 bytes of RAM, 4294963200 of swap, `pid_max` 4194304, one
+  physical link at 125000000 bytes a second. Of 212 rows, 2 carried a
+  reading at all - both `cpu unusual` - and 1 carried `mem unusual`; the
+  host row read calm on every figure. That is the quiet screen the
+  criterion was chosen for: the colour is a thing the eye finds, not a
+  wash over the table.
+- The one state whose colour is known in advance is raised on purpose. A
+  50 percent quota is half a core and the alarm step is above a whole
+  one, so nothing the live check used to raise could ever read alarm -
+  and invariant 18 would have counted zero out of zero on a healthy host,
+  which reads exactly like a pass. A scope with `CPUQuota=250%` and three
+  busy processes gives the known answer: 11 alarm cells on the reference
+  host on 2026-08-30, against 0 over the 42 mapped frames of an ordinary
+  run.
+- Only the alarm count is a floor anybody may stand on. The signal colour
+  is drawn by the reading and by the bar, and the bar has a role of its
+  own, so an `a` cell is a reading and nothing else. The accent is not so
+  clean - it also paints the header of the sorted column and the label of
+  the measurement window - so the unusual count is reported and never
+  demanded.
+- Two heuristics did not fire on that host and are kept anyway, with the
+  reason written down rather than the threshold moved. `pid_max` there is
+  4194304, so 10 percent of it is a number no host reaches and the tasks
+  reading is dead on a modern kernel; it stays because a container with
+  `pids.max` set low is exactly where a runaway fork bomb shows, and
+  because the alternative is a figure this project would have invented.
+  Swap was untouched, so the swap readings had nothing to read.
+
+D-43. The card says why the row is marked. DECIDED 2026-08-30 by the
+operator, after using the screen D-42 built: a glyph and a colour say
+that a figure is worth a second look, and neither says what was compared
+against what.
+
+- The card of a marked row carries a block of its own, one line per
+  heuristic that fired, with the name of the heuristic on the left edge
+  and the reason on the right. The reason names the figure, the whole it
+  was read against and the threshold it crossed, so the reader can
+  disagree with the tool rather than only obey it.
+- Only the heuristics that fired. A row where everything reads calm
+  carries no block at all, which is the rule the card already follows:
+  it prints what this node has and nothing else (section 11).
+- The reasons are read over BOTH columns the card prints, and the
+  sentence names the figure of each. The first version read only the mode
+  the screen was showing, and on a live host that printed `0.343 busy
+  cores` beside a card row saying `0.203` in the `now` column: the number
+  in the sentence was in neither column the reader could see. A heuristic
+  that fired in either column is a reason, and the rule explained is the
+  one that marks the row - so a spike that reads alarm in `now` is
+  explained as an alarm. Corrected by the operator on 2026-08-30, before
+  this decision was committed.
+- A figure that did not move between the two columns is written once -
+  `8.5G (55%) now and avg` - because the same number said twice pushed the
+  sentence onto a second line.
+- The name of a heuristic is the LABEL OF THE CARD ROW its figure stands
+  on: `cpu`, `memory`, `swap`, `tasks`, `net`, and `zombie` or `stuck in
+  kernel` for the two facts, which have no figure and therefore no row. A
+  name of its own - `busy cores`, `memory share` - is a name nobody can
+  look up, and that is what made the first block unreadable: three
+  sentences about numbers the reader could not find.
+- Where the figure of a heuristic is not the figure of the row it is
+  named after, the sentence says so. The swap heuristic reads the swap of
+  the whole subtree while the card row beside it is `own swap`, so on a
+  live host the block said `1.9G` above a row saying `0M`. It now reads
+  `over the subtree`. Memory says `with children` for the same reason.
+- The block stands above the figures rather than under them. A card that
+  does not fit is cut from its tail and says how many lines it hid
+  (D-25); the reason a row is marked is the thing the reader opened the
+  card for, so it is not what gets cut.
+- The names are short enough for the label column of sixteen cells, like
+  every other label on the card (D-32), and each sentence fits one line of
+  a hundred-cell terminal beside that column.
+- One source for the thresholds. The reason is built by the same code
+  that computes the reading, so a threshold cannot move in one and stay
+  in the other - which is the way a sentence about a number goes stale
+  without anybody noticing.
+
+D-44. A mark says whether the row is the source or the way down to it.
+DECIDED 2026-08-30 by the operator, who opened a row carrying a red mark,
+went into it and found nothing there.
+
+- What went wrong. Every figure on a row is the sum of its subtree
+  (FR-5), so a reading on one row appears on every row above it up to the
+  root. On the host that raised this, 4 rows out of 292 were marked and
+  they stood in one chain - `host`, `systemd`, `containerd-shim`,
+  `start-all.sh` - and 2 of the 4 were explained entirely by a child. The
+  mark on `systemd` is the worst case of it: pid 1 has the whole machine
+  in its subtree, so its memory is above any share of `MemTotal` a
+  threshold could name, on any host that is doing work at all. That mark
+  is a tautology, not a finding, and the reader who follows it into the
+  row finds a `(self)` remainder of 0.000 cores and 50M.
+- The rule. A row is the SOURCE of its reading when the reading survives
+  on its own contribution - the row's figures minus the sum of its
+  children, which is the `(self)` remainder FR-14 already computes - or
+  when the row has no children at all. A state the kernel reports is
+  always the row's own. Otherwise the row is the WAY DOWN to the source,
+  and it is marked as such.
+- The glyphs. `!` alarm and `*` unusual where the row is the source;
+  `↓` where the reading only passes through it, drawn in the colour of
+  the worst reading the subtree carries. Three glyphs in one cell, all of
+  width one, and the arrow is a character the screen already draws in the
+  network column, so its width is settled.
+- Why not simply drop the mark from a row that is only a way down: then
+  nothing on the level says the problem exists, and the reader has to
+  open every branch to find it. The whole point of the top level is to
+  say where to go.
+- The share of memory on an aggregate row stays as it is: the sum of the
+  subtree against `MemTotal`. It is known to be high - RSS counts a
+  shared page in full for every process that maps it, so a branch can sum
+  above what the machine reports for itself, and on the host that raised
+  this the row said 8.5G where the machine said 5.8G. The operator chose
+  to keep the figure and let the glyph carry the distinction rather than
+  to change what the number means, because the colour has to agree with
+  the figure it stands beside.
+- What the memory step does with the glyph in place, measured on the
+  reference host on 2026-08-30 over `--dump-model json --tick 800`: 210
+  rows, 6 cores, 16596729856 bytes of RAM, and the machine reporting
+  1971195904 bytes used. Two rows stood at or above the unusual step of
+  10 percent of `MemTotal` - `systemd` at 15.02 and the host row at 11.88
+  - and none reached the alarm step of 25 percent. Exactly one row
+  carried a reading at all, `systemd mem unusual`, and it is a way-down
+  row: the arrow is now the whole of what the memory step says on a quiet
+  machine. The host row reads against its own steps (90 and 75 percent of
+  `MemTotal`, D-42) and is calm.
+
 ## 10. Definition of done
 
 The work is finished when:
@@ -1721,6 +1995,14 @@ worth carrying next to the requirements:
   column is not drawn at all and the cells go to the name (D-35).
 - The bar is not a column of its own but a strip beside the column the
   rows are ordered by, and it moves with the sorting (D-27).
+- Every figure carries a reading of itself - calm, unusual or alarm - and
+  a row that carries a problem is marked with a glyph in the leading cell
+  of its name column, which says whether the row is the source of the
+  reading or the way down to it (D-44). The reading is absolute: a share of what this
+  machine can do, or a state the kernel reports. Disk carries none. The
+  bar beside the sorted column keeps reading the level instead, so the
+  two may disagree, and they mean different things when they do
+  (FR-21, D-42).
 - Every figure of the header holds a fixed place, so that the labels
   beside it stand still while the numbers change. A figure too wide for
   its place takes the room it needs rather than losing a digit (D-39).
@@ -1742,6 +2024,10 @@ worth carrying next to the requirements:
   parentheses after its own name and keeps its own owner. The shim that
   starts a container is a real process of the runtime; what the reader is
   looking for is what it leads to (D-30).
+- The card of a marked row says why it is marked, above its figures: one
+  line per heuristic that fired in either column, named after the card row
+  its figure stands on, and a reason naming the figure of both columns,
+  the whole and the threshold. A calm row carries no such block (D-43).
 - A row whose children are several containers of one pod names the pod
   there instead, by the first group of its UUID (D-31). Where they belong
   to different pods the row names nothing: one row cannot name two.
