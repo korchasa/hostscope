@@ -479,8 +479,9 @@ application spent 3.55 percent of one core against 1.97. An earlier run
 the same hour measured 4.12 percent and failed the budget of section 6.
 The cause is `status` being read for every process wherever the host has
 swapped (D-35), which is measured there as 2.7 ms against 7.2 for both
-files; what has not been settled is whether the budget or the reading
-should give way.
+files. Settled by D-40: the budget carries two numbers now, 4 percent
+where nothing is in swap and 5 where the column is drawn, and the check
+reads `/proc/meminfo` to know which of them it is holding the host to.
 
 **The last full run, on the Kubernetes rig, 2026-08-29.** 39 checks
 passed, none failed, one skipped, in 134 seconds. The frame linter went
@@ -617,6 +618,7 @@ linter catches layout, not meaning.
 | D-37 | Unit tests over the palette: every theme is reachable by the name it ships under, no theme puts a band colour or its own text colour on the ground of its selected row, and the first theme is still the sixteen terminal names. A unit test over the renderer walks all eight and checks that each reaches both the frame line and the ground of the selected row. `--theme` takes a name and refuses one it does not know; `HOSTSCOPE_THEME` takes a name and ignores one it does not know |
 | D-38 | A unit test over the timer: the first call is not due, a call before the span is not due, and a call after it is due once. On the host, `tmux pipe-pane` over 20 seconds counts the bytes and the full clears at the three second and the one second interval, and section 6a carries what it counted |
 | D-39 | A unit test over the renderer draws the header twice, with the same host at two magnitudes of every figure, and demands that `MEM`, `SWAP` and `LOAD` land on the same cell both times. Invariant 16 of `scripts/frame-lint.py` holds the same across the frames of every captured run |
+| D-40 | The `measurements` section reads `/proc/meminfo` and holds the host to 4 percent of one core where nothing is in swap and to 5 where the swap column is drawn, printing which of the two it applied. Confirmed on both rigs on 2026-08-29: 2.40 percent against the four on the rig that had swapped nothing, 3.66 against the five on the one that had |
 | Section 6 | Section 9 of this document |
 
 ## 14. Link to the requirements

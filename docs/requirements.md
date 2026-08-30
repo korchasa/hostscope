@@ -480,7 +480,9 @@ tasks and 2311 threads, Ubuntu 22.04, cgroup v2.
 - Redraw: under 50 ms, to hold 10 updates per second.
 - Default collection interval: 3 seconds, moved by `-` and `+` between a
   pause and a minute, and set at start by `--tick` (D-28).
-- Own usage: under 4 percent of one core and under 100 MB of memory on a
+- Own usage: under 4 percent of one core where the host has swapped
+  nothing, under 5 percent where it has and the swap column is therefore
+  drawn (D-40), and under 100 MB of memory in both cases, on a
   tree of about 110 cgroups and 370 processes at a one second interval -
   the interval the figure was measured at, and a third of what the
   application now opens at (D-28). The figure is stated with the tree it
@@ -532,7 +534,7 @@ bash host-check.sh measurements
 | Collection per tick | (no target) | 47.3 ms at the 95th percentile |
 | Output per frame over SSH | bounded by the screen | 454 bytes per frame, no full clear in 20 s - taken before the repaint of D-38. After it, on the Kubernetes rig: 1313 bytes per frame and five clears in 20 s (section 9 of the testing document) |
 | Own memory | under 100 MB | 1.8 MB |
-| Own CPU | under 4 percent of one core | 3.11 percent |
+| Own CPU | under 4 percent of one core, 5 where the swap column is drawn (D-40) | 3.11 percent with nothing in swap; 3.55 and 4.12 percent in two runs on 2026-08-29, when 2 GB of the swap device was in use |
 
 Every line of that table now comes from one twenty second window: the
 application runs once, under a scope of its own, and the timings are read
@@ -1561,6 +1563,35 @@ its own numbers.
   wider everything still fits; at eighty the load segment now gives way,
   which is what the narrowest-segment rule of that line already provides
   for.
+
+D-40. The swap column costs a percent of a core, and the budget says
+so. DECIDED 2026-08-29 by the operator, after a full run failed the
+budget of section 6 on a host that had swapped.
+
+- Where the host has moved anything out of RAM the swap column is drawn
+  (D-35), and drawing it means reading `/proc/<pid>/status` for every
+  process beside the `stat` the collector already reads. That is the
+  measurement of D-35 seen from outside: 2.7 ms against 7.2 ms for both
+  files over 221 processes.
+- Measured on the Docker rig on 2026-08-29: 366 processes, four cores, 2
+  GB of the swap device in use. Two runs the same hour cost 3.55 and
+  4.12 percent of one core, so the old budget of 4 percent was met once
+  and missed once. Collection took 48.7 ms at the 95th percentile there
+  against 41.3 ms on a rig that had swapped nothing.
+- The budget is now two numbers rather than one: 4 percent where nothing
+  is in swap, 5 percent where the column is drawn. The check reads
+  `/proc/meminfo` and applies the one that belongs to the host it is on,
+  so neither figure is a guess about the other.
+- Rejected: reading `status` once every few ticks, on the grounds that
+  swap moves over seconds rather than ticks. It would hold the figure
+  inside the old budget and buy that with a row whose columns are of
+  different ages - the swap of a process would be older than its CPU, and
+  nothing on the screen would say so. The cost is honest and small; a
+  budget that states it is better than a reading that hides it.
+- What this does not cover is a host far larger than the one the budget
+  is written for. Section 6a records 9.3 percent on a machine of 1418
+  processes with all of its swap in use, and that tree is four times the
+  one every figure here is stated on.
 
 ## 10. Definition of done
 

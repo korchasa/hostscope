@@ -860,9 +860,21 @@ import sys
 cpu = float(sys.argv[1]) / 1e6 / 20 * 100
 mem = float(sys.argv[2]) / (1 << 20)
 print(f"  own usage over the same 20 s: {cpu:.2f} percent of one core, {mem:.1f} MB")
-# Section 6 as restated by D-16: under 4 percent of one core on a forest of
-# about 370 processes at a one second interval.
-sys.exit(0 if cpu < 4.0 and mem < 100 else 1)
+# Section 6 as restated by D-16 and widened by D-40: under 4 percent of one core
+# on a forest of about 370 processes at a one second interval, and under 5 where
+# the host has swapped - the swap column then reads `status` for every process
+# beside the `stat` that is read anyway. Which of the two applies is read off the
+# host rather than assumed, so neither figure is a guess about the other.
+meminfo = {}
+with open("/proc/meminfo") as f:
+    for line in f:
+        k, _, v = line.partition(":")
+        meminfo[k] = float(v.split()[0])
+swapped = meminfo.get("SwapTotal", 0.0) - meminfo.get("SwapFree", 0.0) > 0
+limit = 5.0 if swapped else 4.0
+print(f"  the budget here is {limit:.0f} percent: the host has "
+      f"{'swapped, so the swap column is drawn' if swapped else 'swapped nothing'}")
+sys.exit(0 if cpu < limit and mem < 100 else 1)
 EOF
     if [ $? -eq 0 ]; then
       pass "own usage is inside the budget of section 6"
