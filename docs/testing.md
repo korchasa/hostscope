@@ -469,6 +469,19 @@ sudo systemd-run --scope --slice=hs -p CPUQuota=50% --unit=hs-steady -q \
   screen clear does not arrive on every frame: for `htop` it did not
   arrive once in two seconds.
 
+**On the Docker rig, 2026-08-29, the same day.** 40 checks passed, none
+failed, nothing skipped, in 140 seconds - the container sections that
+have nothing to work with on the Kubernetes rig all ran here. 366
+processes, four cores, and two gigabytes of the swap device in use, so
+this is the first full run with the swap column drawn: collection took
+48.7 ms at the 95th percentile against 41.3 on the other rig, and the
+application spent 3.55 percent of one core against 1.97. An earlier run
+the same hour measured 4.12 percent and failed the budget of section 6.
+The cause is `status` being read for every process wherever the host has
+swapped (D-35), which is measured there as 2.7 ms against 7.2 for both
+files; what has not been settled is whether the budget or the reading
+should give way.
+
 **The last full run, on the Kubernetes rig, 2026-08-29.** 39 checks
 passed, none failed, one skipped, in 134 seconds. The frame linter went
 over 133 frames rather than the 29 the `tmux` walks used to produce -

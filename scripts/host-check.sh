@@ -189,6 +189,14 @@ node_value() {
 
 prepare() {
   part "1. preparation"
+  # The frames of the run before this one go first. The linter runs early, and
+  # the sections that write frames run late, so a leftover file is linted
+  # against today's build: on the Docker rig on 2026-08-29 a full run failed on
+  # thirty-six invariants belonging to frames an older binary had left in place.
+  # The same leftover hides the opposite fault just as well - a section that
+  # writes no frames at all leaves yesterday's good ones for the linter to be
+  # satisfied by.
+  rm -rf "$DIR/frames"
   mkdir -p "$DIR/frames" "$DIR/state"
   docker ps --format '{{.Names}}' | sort > "$DIR/state/containers-before.txt"
   systemctl list-units --failed --no-legend > "$DIR/state/failed-before.txt"

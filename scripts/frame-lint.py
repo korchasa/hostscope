@@ -219,11 +219,22 @@ def main():
     problems = []
     total = 0
     for path in files:
-        frames = frames_of(path)
+        # A path that cannot be read is a problem to report, not a traceback to
+        # decipher. An unmatched shell glob arrives here as its own pattern.
+        try:
+            frames = frames_of(path)
+        except OSError as e:
+            problems.append(f"{path}: cannot be read: {e.strerror}")
+            continue
         for n, frame in enumerate(frames):
             total += 1
             problems += lint(frame, f"{path}#{n}")
         problems += lint_across(frames, path)
+    # A linter that linted nothing must not report success: silence here means
+    # the sections that capture frames did not run, and that is the state this
+    # check exists to notice.
+    if total == 0:
+        problems.append("no frames to lint at all")
     print(f"linter: {total} frames, {len(problems)} problems")
     for p in problems:
         print("  " + p)
