@@ -121,21 +121,22 @@ nord, dracula, tokyo-night and catppuccin.
 ```
 ## Building
 
-Rust 1.96, and no dependencies beyond `ratatui`, `crossterm` and
-`unicode-width` - the last of which `ratatui` already draws with. Build
-it statically for the target host, which then needs nothing installed:
+A Rust toolchain no older than the `rust-version` of `Cargo.toml`, and
+no dependencies beyond `ratatui`, `crossterm` and `unicode-width` - the
+last of which `ratatui` already draws with. Build it statically for the
+target host, which then needs nothing installed:
 
 ```
 rustup target add x86_64-unknown-linux-musl
 cargo build --release --target x86_64-unknown-linux-musl
 ```
 
-The result is a 968 KB static binary.
+The result is a 1008 KB static binary, measured on 2026-08-31.
 
 ## Checking it
 
 ```
-make fast                   fmt, clippy and 92 tests, on your machine
+make fast                   fmt, clippy and 163 tests, on your machine
 make live HOST=your.host    the whole check on a Linux host
 ```
 

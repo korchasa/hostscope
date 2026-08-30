@@ -2081,25 +2081,34 @@ below.
 The work is finished when:
 
 - The step from section 8 is done and written down.
-- FR-1 - FR-20 are closed with the stated acceptance, except FR-4, which
+- FR-1 - FR-21 are closed with the stated acceptance, except FR-4, which
   D-17 withdrew, and FR-16 and FR-19, which D-24 withdrew. FR-18 was
   added on 2026-08-15 by D-21, FR-19 the same day by D-23, and FR-20 the
   same day by D-24. FR-1a was narrowed by D-25 the same day: cores are
   the only unit. FR-20 was narrowed by D-26, also the same day: the name
-  is the only thing the column shows.
+  is the only thing the column shows. FR-21 was added on 2026-08-30 by
+  D-42, and D-43, D-44, D-45 and D-46 said what a mark stands on: the
+  card names the rule that fired, the glyph says whether the row is the
+  source or the way down to it, a control group is read by the ceilings
+  it is held against, and the header reads the machine as three shares
+  of time. FR-10a was added on 2026-08-30 by D-41, which named the one
+  file read outside `/proc` and `/sys/fs/cgroup` and made it refusable.
 - The open decisions D-4, D-11 - D-15 are settled and written down here.
   Done on 2026-08-14, together with D-16, which the measurement of the
   section 6 figures opened and the operator closed the same day, and
   D-17, which removed three features the same day, and D-18, which the
   review of D-17 opened and closed on 2026-08-15, and D-19 - D-21 and
   D-23, D-24, D-25, D-26 and D-27 - D-29, which the operator opened and
-  closed on 2026-08-15 after using the application.
+  closed on 2026-08-15 after using the application. D-30 - D-41 were
+  opened and closed between 2026-08-29 and 2026-08-30, and D-42 - D-46
+  on 2026-08-30. No decision in section 9 is left open.
 - The figures of section 6 are measured and written down together with
   the measurement command. Done in section 6a, on the Docker rig rather
   than on the reference host, which this work had no access to.
 - The binary is copied to a clean host and starts with no package
-  installation. Done: a static `x86_64-unknown-linux-musl` build, 918 KB,
-  copied with `scp` and run on the Docker rig with nothing installed.
+  installation. Done: a static `x86_64-unknown-linux-musl` build, 918 KB
+  on 2026-08-14 and 1008 KB on 2026-08-31, copied with `scp` and run on
+  both rigs with nothing installed.
 
 Two facts about the numbers on the screen, found during verification and
 worth carrying next to the requirements:

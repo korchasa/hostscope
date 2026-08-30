@@ -142,7 +142,8 @@ links it with `rust-lld` and `link-self-contained`, so no musl toolchain
 and no Docker are needed. Measured on 2026-08-15: a release build of the
 target takes 49 seconds from scratch and 6.5 seconds after an edit. The
 binary it produces needs nothing installed on the host; it was 918 KB
-then and is 968 KB after the dependency update of 2026-08-29.
+then, 968 KB after the dependency update of 2026-08-29 and 1008 KB on
+2026-08-31, when the readings of FR-21 were in it.
 
 Building, shipping and running are one command, `make live`, and not
 three. The three were `ssh mkdir`, `scp` and `ssh bash host-check.sh`,
@@ -536,6 +537,34 @@ sudo systemd-run --scope --slice=hs -p CPUQuota=50% --unit=hs-steady -q \
   screen clear does not arrive on every frame: for `htop` it did not
   arrive once in two seconds.
 
+**The last full run, on both rigs, 2026-08-31.** The Kubernetes rig
+passed 49 checks with none failed and one skipped - the container with a
+120 character name, which needs a Docker to raise it. 211 processes on
+six cores: 22.5 ms to the first frame, collection 52.1 ms at the 95th
+percentile over 19 ticks, render 0.8 ms over 20 frames, five full screen
+clears in 20 seconds, and the application itself 3.21 percent of one core
+and 1.3 MB. The linter read 45 frames of the ordinary walk with no alarm
+cell on any of them, and the two frames of the induced state with 11.
+
+The Docker rig passed 49 and failed one the same day. 289 processes on
+four cores: 42.5 ms to the first frame, collection 54.7 ms at the 95th
+percentile, render 0.7 ms, 1355 bytes a frame, and 4.00 percent of one
+core and 1.6 MB against the 5 percent a host with the swap column drawn
+is held to (D-40) - the closest to that ceiling any run has come. The
+oracle agreed on 289 processes and sysstat and procps on 1156 figures
+with nothing skipped as churn. The 120 character container name was
+raised here and kept the columns.
+
+The failure was the netlink comparison, and it was the window rather
+than the figures: the model read 48774 bytes a second in against 42313
+over netlink, 15 percent apart, and four repeats within the minute came
+back 0.2 to 0.3 percent apart. That rig carries a steady 40 to 70 KB/s
+of its own, so a burst landing inside the fraction of a second between
+the two starts moved a ten second rate by a sixth. The window is thirty
+seconds since that day, which divides the same offset by three and takes
+nothing away from what the check is for: a counter summed the wrong way
+does not shrink with the window.
+
 **On the Docker rig, 2026-08-29, the same day.** 40 checks passed, none
 failed, nothing skipped, in 140 seconds - the container sections that
 have nothing to work with on the Kubernetes rig all ran here. 366
@@ -550,7 +579,7 @@ files. Settled by D-40: the budget carries two numbers now, 4 percent
 where nothing is in swap and 5 where the column is drawn, and the check
 reads `/proc/meminfo` to know which of them it is holding the host to.
 
-**The last full run, on the Kubernetes rig, 2026-08-30.** 48 checks
+**The run before those, on the Kubernetes rig, 2026-08-30.** 48 checks
 passed, one failed, one skipped. The failure was the oracle, and it was
 not one: a `containerd-shim` read 226709504 bytes to the oracle and
 239030272 to the model, 5 percent apart, and the section re-run alone a
