@@ -31,8 +31,8 @@ impl Fixture {
     }
 
     /// One cgroup node. Only the list of processes matters: the counters of a
-    /// cgroup are not read at all any more, and the hierarchy is here for the
-    /// one thing only it knows - what runs a process (FR-20).
+    /// cgroup are read for the ceilings a group was held against, and those are
+    /// exercised where they are computed, not through a snapshot on a clock.
     pub fn cgroup(&self, rel: &str, procs: &[i32]) {
         let dir = if rel.is_empty() {
             self.cgroup_root()

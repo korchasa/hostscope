@@ -580,11 +580,160 @@ while True:
     > "$DIR/frames/alarm-00.txt" 2>/dev/null
   sudo -n systemctl stop hs-alarm.scope 2>/dev/null
   wait
+  # The same three figures under a known load, to stand beside the idle ones the
+  # measurements section records. The step on `some` cannot be chosen without
+  # both.
+  python3 - <<'EOF'
+for name in ("cpu", "memory", "io"):
+    try:
+        with open(f"/proc/pressure/{name}") as f:
+            rows = {}
+            for line in f:
+                p = line.split()
+                rows[p[0]] = dict(kv.split("=") for kv in p[1:])
+        some = rows.get("some", {}).get("avg10", "n/a")
+        full = rows.get("full", {}).get("avg10", "n/a")
+        print(f"  under load: pressure {name:6} some avg10 {some:>6}   full avg10 {full:>6}")
+    except OSError:
+        pass
+EOF
   if python3 "$DIR/frame-lint.py" --alarm-min 1 "$DIR/frames/alarm-00.txt"; then
     pass "a row burning more than a core reads alarm, and the map says so"
   else
     fail "the reading did not reach the screen under a load it must call alarm"
   fi
+}
+
+induced_pressure() {
+  part "8e. induced state: the machine actually waiting (FR-1a, D-46)"
+  # Pressure measures contention and not use, which is the whole point of it and
+  # also why the CPU states this script already raises leave it near zero: three
+  # busy processes on a six core machine make nothing wait. What raises it is
+  # more runnable threads than there are cores.
+  local n
+  n=$(nproc)
+  for i in $(seq 1 $((n * 4))); do
+    sudo -n systemd-run --scope --slice=hs --unit="hs-press-$i" -q \
+      timeout 14 python3 -c 'while True: pass' >/dev/null 2>&1 &
+  done
+  pause 6
+  python3 - <<'EOF'
+for name in ("cpu", "memory", "io"):
+    try:
+        with open(f"/proc/pressure/{name}") as f:
+            rows = {}
+            for line in f:
+                p = line.split()
+                rows[p[0]] = dict(kv.split("=") for kv in p[1:])
+        some = rows.get("some", {}).get("avg10", "n/a")
+        full = rows.get("full", {}).get("avg10", "n/a")
+        print(f"  contended: pressure {name:6} some avg10 {some:>6}   full avg10 {full:>6}")
+    except OSError:
+        pass
+EOF
+  local out
+  out=$(sudo -n "$BIN" --dump-frame 1 --tick 700 --size 110x30 2>/dev/null)
+  sudo -n systemctl stop 'hs-press-*.scope' >/dev/null 2>&1
+  sudo -n systemctl reset-failed 'hs-press-*.scope' >/dev/null 2>&1
+  wait
+  if printf '%s' "$out" | grep -q 'WAIT'; then
+    pass "the machine reads itself as three shares of time (D-46)"
+  else
+    fail "the header does not carry the pressure figures (D-46)"
+  fi
+}
+
+induced_ceilings() {
+  part "8d. induced state: the ceilings a group is held against (FR-21, D-45)"
+  # The four facts are the only reading of a row that does not depend on the
+  # machine, and on this host they are silent: a memory limit is set on 3
+  # cgroups out of 90 and no cgroup has a CPU quota at all. A rule that never
+  # fires cannot be told from a rule that is switched off, so each of the three
+  # is raised on purpose with a known answer. That is the failure D-42 already
+  # recorded once, when invariant 18 counted zero out of zero on a healthy host.
+  #
+  # Two ticks, because a fact is the growth of a counter between them: a group
+  # throttled before the run started is not a group being throttled now.
+  held() {
+    local unit=$1 name=$2 field=$3
+    shift 3
+    sudo -n systemd-run --unit="${unit%.*}" -q "$@" >/dev/null 2>&1 &
+    pause 0.7
+    local out
+    out=$(sudo -n "$BIN" --dump-model json --dump-frame 2 --tick 700 2>/dev/null)
+    sudo -n systemctl stop "$unit" >/dev/null 2>&1
+    # A unit whose process was killed for memory, or cut short by `timeout`, is
+    # left behind as a failed unit - and the cleanup section compares the failed
+    # list against the one from before the run. Clearing it here is what keeps
+    # the state this check raised from being reported as damage.
+    sudo -n systemctl reset-failed "$unit" >/dev/null 2>&1
+    wait
+    if printf '%s' "$out" | grep -q "\"$field\": true"; then
+      pass "$name reaches the row as a fact (D-45)"
+    else
+      fail "$name was raised and no row says so (D-45)"
+    fi
+  }
+
+  # A tenth of a core against a loop that wants a whole one: the scheduler has
+  # to cut the period short, and `nr_throttled` is what counts that.
+  held hs-throttle.scope "a group held back by its CPU quota" throttled \
+    --scope --slice=hs -p CPUQuota=10% timeout 14 python3 -c 'while True: pass'
+
+  # A child that asks for more memory than the group has, over and over. It has
+  # to be a child: a group whose only process is killed takes its own directory
+  # with it, and then there is no row left to carry the fact. The parent stays
+  # small and outlives every kill, which is also what a supervised service looks
+  # like when it is being killed for memory.
+  # A transient service and not a scope in `hs.slice`, which the other two use.
+  # Measured on this host on 2026-08-30: the slice created by `--slice=hs` never
+  # gets `memory` into its `cgroup.subtree_control`, so a scope there has no
+  # `memory.max` and no `memory.events.local` at all - the limit is silently not
+  # applied and the counter does not exist. `system.slice` carries `memory pids`
+  # in its subtree control, so a transient service there gets both.
+  #
+  # `OOMPolicy=continue` is what makes the state observable at all. A service
+  # takes systemd's default of `stop`, so the first kill tears the unit down and
+  # the cgroup is gone before the next tick can read its counter - the check
+  # then reports that nothing was killed on a machine where something was.
+  cat > "$DIR/hs-eat-memory.py" <<'PY'
+import os, time
+end = time.time() + 12
+while time.time() < end:
+    pid = os.fork()
+    if pid == 0:
+        x = []
+        while True:
+            x.append(bytearray(4 * 1024 * 1024))
+    os.waitpid(pid, 0)
+    time.sleep(0.2)
+PY
+  held hs-oom.service "a process killed for memory" oom_kill \
+    -p MemoryMax=64M -p MemorySwapMax=0 -p OOMPolicy=continue -- \
+    /usr/bin/timeout 14 /usr/bin/python3 "$DIR/hs-eat-memory.py"
+
+  # The same state raises the ceiling too, and it raises it first: the group is
+  # pushed back against `memory.max` many times over before anything is killed.
+  held hs-ceiling.service "a group pushed back on its memory limit" mem_ceiling \
+    -p MemoryMax=64M -p MemorySwapMax=0 -p OOMPolicy=continue -- \
+    /usr/bin/timeout 14 /usr/bin/python3 "$DIR/hs-eat-memory.py"
+
+  # Five tasks against a process that keeps asking for a sixth. The refusals
+  # have to go on for the whole window and not happen once at the start: the
+  # fact is the growth of the counter between two ticks, so a burst that is over
+  # before the first tick leaves nothing to see.
+  held hs-pids.scope "a fork refused against the pid ceiling" pid_ceiling \
+    --scope --slice=hs -p TasksMax=5 timeout 14 python3 -c "
+import os, time
+end = time.time() + 12
+while time.time() < end:
+    try:
+        if os.fork() == 0:
+            time.sleep(1)
+            os._exit(0)
+    except OSError:
+        pass
+    time.sleep(0.05)"
 }
 
 induced_many() {
@@ -866,6 +1015,16 @@ security() {
     echo "$outside" | head -5 | sed 's/^/    /'
   fi
 
+  # D-45 removed the task reading, and with it the only reader of
+  # `/proc/sys/kernel/pid_max`. A rule that cannot fire leaves no trace to
+  # inspect, so the check is on the read itself: the file is not opened at all.
+  # It sits inside /proc, so the allow-list above would never have caught it.
+  if opened_paths "$DIR/strace.log" | grep -qx '/proc/sys/kernel/pid_max'; then
+    fail "the task ceiling is still read, though nothing reads a task ceiling (D-45)"
+  else
+    pass "/proc/sys/kernel/pid_max is not opened by any run (D-45)"
+  fi
+
   # D-41: the one file outside the two trees can be refused, and the check says
   # so only when it saw the file opened without the flag. A run where it was
   # never opened at all would pass the first half and prove nothing.
@@ -951,6 +1110,23 @@ print(f"  output over 20 s: {size} bytes, {size/max(1,len(render)):.0f} per fram
 clears = open(stream, "rb").read().count(b"\x1b[2J")
 print(f"  full screen clears in 20 s: {clears}")
 EOF
+  # What the machine says it waited for, which is what the header now shows in
+  # place of the load average (D-46). It is recorded here so the figure in the
+  # requirements has a command behind it and a date on it.
+  python3 - <<'EOF'
+for name in ("cpu", "memory", "io"):
+    try:
+        with open(f"/proc/pressure/{name}") as f:
+            rows = {}
+            for line in f:
+                p = line.split()
+                rows[p[0]] = dict(kv.split("=") for kv in p[1:])
+        some = rows.get("some", {}).get("avg10", "n/a")
+        full = rows.get("full", {}).get("avg10", "n/a")
+        print(f"  pressure {name:6} some avg10 {some:>6}   full avg10 {full:>6}")
+    except OSError:
+        print(f"  pressure {name:6} not exported by this kernel")
+EOF
   pass "the measurements are recorded above"
   if [ -n "$usage" ]; then
     python3 - "$usage" "$mem" <<'EOF'
@@ -987,7 +1163,8 @@ EOF
 cleanup() {
   part "9. cleanup and comparison against the state before the run"
   stop_app
-  sudo -n systemctl stop 'hs-*.scope' 2>/dev/null
+  sudo -n systemctl stop 'hs-*.scope' 'hs-*.service' 2>/dev/null
+  sudo -n systemctl reset-failed 'hs-*.scope' 'hs-*.service' 2>/dev/null
   pause 2
   sudo -n rmdir /sys/fs/cgroup/hs.slice 2>/dev/null
   docker ps --format '{{.Names}}' | sort > "$DIR/state/containers-after.txt"
@@ -1011,7 +1188,7 @@ cleanup() {
 
 # The order follows the section numbers the parts print, so a log reads in
 # the order of the verification document.
-ALL="prepare baseline oracle pidstat network scenario keys linter security induced_load induced_alarm induced_disk induced_many induced_vanishing induced_names degraded sizes measurements cleanup"
+ALL="prepare baseline oracle pidstat network scenario keys linter security induced_load induced_alarm induced_pressure induced_ceilings induced_disk induced_many induced_vanishing induced_names degraded sizes measurements cleanup"
 # Each section is timed: the run costs minutes, and the only way to know which
 # minute is worth paying for is to see where it goes.
 for section in ${*:-$ALL}; do

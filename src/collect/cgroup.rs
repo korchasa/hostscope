@@ -3,8 +3,14 @@
 //! login session (FR-20).
 //!
 //! Every process on a Linux host sits in exactly one cgroup, and the path of
-//! that cgroup says what put it there. Nothing else here is read: the walk
-//! opens `cgroup.procs` and no other file, which is also what makes a captured
+//! that cgroup says what put it there.
+//!
+//! Beside the path the walk opens three more files, and only three: `cpu.stat`,
+//! `memory.events.local` and `pids.events`. Each keeps a running count of the times
+//! the group was held against a ceiling it was given - the CPU quota, the
+//! memory limit, the pid limit - and those counts are the only reading of a row
+//! that means the same on a machine with one core and on a machine with two
+//! hundred (D-45). Nothing else is read, which is what keeps a captured
 //! snapshot a valid substitute for the live tree (FR-17, `--cgroup-root`).
 
 use std::fs;
@@ -12,11 +18,37 @@ use std::path::Path;
 
 use crate::model::{Owner, OwnerKind};
 
-/// One cgroup directory: where it is, and which processes it holds.
+/// What a cgroup records about the ceilings it was given. Every one of these is
+/// a running total, so what the screen shows is the growth between two ticks
+/// and never the value itself: a group throttled once an hour ago is not a
+/// group being throttled now (D-45).
+///
+/// `None` means the kernel did not write the file. It is not a zero, and D-13
+/// forbids turning it into one: an old kernel with no `pids.events` has not
+/// told us that no fork was ever refused.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CeilingCounters {
+    /// `nr_throttled` of `cpu.stat`: periods the scheduler cut short because
+    /// the group had spent its quota. Invisible in every other tool, and the
+    /// usual answer to "the service is slow and the processor is idle".
+    pub throttled: Option<f64>,
+    /// `oom_kill` of `memory.events.local`: processes of this group killed for
+    /// memory. The local file, because the plain one counts the whole subtree.
+    pub oom_kill: Option<f64>,
+    /// `max` of `memory.events.local`: times the group was pushed back against
+    /// `memory.max`. It happens before the killing does.
+    pub mem_ceiling: Option<f64>,
+    /// `max` of `pids.events`: forks refused against `pids.max`.
+    pub pid_ceiling: Option<f64>,
+}
+
+/// One cgroup directory: where it is, which processes it holds, and what it
+/// records about its own ceilings.
 #[derive(Clone, Debug, Default)]
 pub struct RawCgroup {
     pub rel: String,
     pub procs: Vec<i32>,
+    pub ceilings: CeilingCounters,
     pub children: Vec<RawCgroup>,
 }
 
@@ -66,7 +98,40 @@ fn read_one(dir: &Path, rel: &str) -> RawCgroup {
             .filter_map(|p| p.parse().ok())
             .collect();
     }
+    // Each file is asked for on its own, because a kernel can write one and not
+    // another: the memory controller may be enabled here and the pid controller
+    // not, and a missing file must leave its counter unavailable rather than
+    // drag the other two down with it.
+    if let Some(text) = read_file(&dir.join("cpu.stat")) {
+        c.ceilings.throttled = field(&text, "nr_throttled");
+    }
+    // `.local`, not `memory.events`: the plain file counts the whole subtree, so
+    // a container killed for memory would mark every other service on the
+    // machine through the slices above it. Where the kernel does not write the
+    // local file the counters stay unavailable rather than falling back to the
+    // hierarchical one, which would be the wrong number under the right name.
+    if let Some(text) = read_file(&dir.join("memory.events.local")) {
+        c.ceilings.oom_kill = field(&text, "oom_kill");
+        c.ceilings.mem_ceiling = field(&text, "max");
+    }
+    if let Some(text) = read_file(&dir.join("pids.events")) {
+        c.ceilings.pid_ceiling = field(&text, "max");
+    }
     c
+}
+
+/// Every cgroup of the tree with what it records about its own ceilings,
+/// including the groups that hold no process of their own.
+///
+/// The groups without processes are the point: a container runtime puts the
+/// memory limit on the pod and runs the process one directory below it, so a
+/// row's ceiling is often set by an ancestor and not by the group the process
+/// is listed in.
+pub fn flatten_ceilings(node: &RawCgroup, out: &mut Vec<(String, CeilingCounters)>) {
+    out.push((node.rel.clone(), node.ceilings));
+    for c in &node.children {
+        flatten_ceilings(c, out);
+    }
 }
 
 /// Every cgroup of the tree as a flat list of `(path, processes)`.
@@ -292,6 +357,74 @@ pub fn short_id(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cgroup keeps its own account of the ceilings it was given, and those
+    /// counters are the only reading of a row that does not depend on the
+    /// machine it runs on (D-45). A file that is not there leaves the counter
+    /// unavailable rather than zero (D-13): an old kernel that never wrote
+    /// `pids.events` has not told us that no fork was ever refused.
+    #[test]
+    fn the_facts_of_a_cgroup_are_read_beside_its_processes() {
+        let dir = std::env::temp_dir().join(format!("hs-cg-{}-facts", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("cgroup.procs"), "7\n").unwrap();
+        fs::write(
+            dir.join("cpu.stat"),
+            "usage_usec 408095\nnr_periods 12\nnr_throttled 3\nthrottled_usec 900\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("memory.events.local"),
+            "low 0\nhigh 0\nmax 5\noom 1\noom_kill 2\n",
+        )
+        .unwrap();
+        let c = read_one(&dir, "/probe");
+        assert_eq!(c.procs, vec![7]);
+        assert_eq!(c.ceilings.throttled, Some(3.0), "the quota was hit 3 times");
+        assert_eq!(
+            c.ceilings.mem_ceiling,
+            Some(5.0),
+            "pushed back on memory.max"
+        );
+        assert_eq!(c.ceilings.oom_kill, Some(2.0), "killed for memory twice");
+        assert_eq!(
+            c.ceilings.pid_ceiling, None,
+            "a file that is not there is not a zero"
+        );
+    }
+
+    /// `memory.events` counts the whole subtree, so reading it on a parent
+    /// would mark every process under that parent - a container killed for
+    /// memory would paint every other service on the machine, which is the
+    /// defect D-44 already cured once for the figures. `memory.events.local`
+    /// counts what happened in this group and nowhere else.
+    ///
+    /// Measured on the reference host on 2026-08-30: after eight kills inside
+    /// one transient service, `system.slice/memory.events` read `oom_kill 51`
+    /// while `system.slice/memory.events.local` read 0. `pids.events` has no
+    /// such problem on that kernel - a service refusing 56 forks left its
+    /// parent slice at `max 0` - so it is read as it is.
+    #[test]
+    fn the_events_of_a_group_are_its_own_and_not_its_childrens() {
+        let dir = std::env::temp_dir().join(format!("hs-cg-{}-local", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("cgroup.procs"), "7\n").unwrap();
+        fs::write(
+            dir.join("memory.events"),
+            "low 0\nhigh 0\nmax 1878\noom 51\noom_kill 51\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("memory.events.local"),
+            "low 0\nhigh 0\nmax 2\noom 0\noom_kill 0\n",
+        )
+        .unwrap();
+        let c = read_one(&dir, "/probe");
+        assert_eq!(c.ceilings.oom_kill, Some(0.0), "the 51 belong to a child");
+        assert_eq!(c.ceilings.mem_ceiling, Some(2.0), "the 2 are this group's");
+    }
 
     #[test]
     fn reads_a_key_and_its_value() {

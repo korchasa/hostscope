@@ -244,7 +244,7 @@ def lint_across(frames, name):
     places = {}
     for n, frame in enumerate(frames):
         head = frame[1:3]
-        for label in ("MEM", "SWAP", "LOAD"):
+        for label in ("MEM", "SWAP", "WAIT"):
             at = None
             for line in head:
                 i = line.find(label)
@@ -260,6 +260,13 @@ def lint_across(frames, name):
                     f"{name}: {label} sits at {at} in frame {n} "
                     f"and at {first[0]} in frame {first[1]}"
                 )
+    # A label the header stopped drawing sits at None in every frame, which
+    # compares equal to itself: the invariant would pass over a header that had
+    # lost it. `SWAP` is the one that may be absent, because a host that has
+    # swapped nothing draws no swap column (D-35).
+    for label in ("MEM", "WAIT"):
+        if places.get(label, (None, 0))[0] is None:
+            bad.append(f"{name}: the header draws no {label} at all")
     return bad
 
 

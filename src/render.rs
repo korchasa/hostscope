@@ -7,7 +7,8 @@ use ratatui::text::{Line, Span};
 
 use crate::app::{App, Row, View};
 use crate::model::{
-    HostReadings, Kind, Mark, Metrics, Mode, Node, OwnerKind, Reading, Readings, Sort,
+    pressure_reading, HostReadings, Kind, Mark, Metrics, Mode, Node, OwnerKind, Reading, Readings,
+    Sort,
 };
 use crate::theme;
 use crate::util::{
@@ -359,7 +360,7 @@ fn summary_cpu(app: &App, u: usize) -> Line<'static> {
     };
     // The summary is the first thing read on the screen, so the figures the
     // machine reports about itself carry their reading too (D-42).
-    let read = HostReadings::of(host.load[0], mem_used, 0.0, &snap.limits);
+    let read = HostReadings::of(mem_used, 0.0, &snap.limits);
     clip(
         vec![
             Span::styled("  CPU ", dim()),
@@ -388,6 +389,48 @@ fn summary_cpu(app: &App, u: usize) -> Line<'static> {
     )
 }
 
+/// What the machine waited for, as three shares of time (D-46).
+///
+/// It stands where the load average used to. A queue length cannot be carried
+/// from one machine to the next - 8 is a full machine on eight cores and an
+/// idle one on two hundred - and on Linux it counts processes in an
+/// uninterruptible wait as well, so a storage device that stopped answering
+/// raises it without any work being done. A share of time waiting is the same
+/// quantity on every machine and says what actually hurt.
+///
+/// The window follows the mode the whole screen is in: the kernel keeps a ten
+/// and a sixty second average, and those are near enough the two windows FR-13
+/// already gives every other figure.
+///
+/// The colour comes from the kernel's own distinction and from no threshold of
+/// ours: `full` is the share of time where every non-idle task was stalled at
+/// once, which its documentation calls thrashing. Where that is above zero the
+/// figure is marked. The step that would make it an alarm has to be measured
+/// on a rig before it can be written down.
+fn wait_segment(app: &App) -> Vec<Span<'static>> {
+    let p = app.view().host.pressure;
+    let mut out = vec![Span::styled("WAIT ", dim())];
+    for (label, s) in [("cpu", p.cpu), ("mem", p.mem), ("io", p.io)] {
+        let some = match app.mode {
+            Mode::Instant => s.some10,
+            Mode::Average => s.some60,
+        };
+        let read = pressure_reading(some);
+        // The label is padded to the width of the widest of the three, so the
+        // three figures stand in a column and the eye reads down them.
+        out.push(Span::styled(format!("{} ", pad(label, 3)), dim()));
+        out.push(Span::styled(
+            // Whole percent: a tenth of a percent of stalled time is not a
+            // thing anybody acts on, and the segment has to stand beside the
+            // window label in the wider of the two modes.
+            pad_num(&or_na(some, |v| format!("{v:.0}%")), 4),
+            style_for(read, plain()),
+        ));
+        out.push(Span::styled(" ".to_string(), plain()));
+    }
+    out
+}
+
 fn summary_net(app: &App, u: usize) -> Line<'static> {
     let snap = app.view();
     let host = &snap.host;
@@ -404,7 +447,7 @@ fn summary_net(app: &App, u: usize) -> Line<'static> {
     } else {
         0.0
     };
-    let read = HostReadings::of(host.load[0], 0.0, swap_used, &snap.limits);
+    let read = HostReadings::of(0.0, swap_used, &snap.limits);
     // The window every number on screen is taken over (FR-13). It sits in the
     // right corner so the two modes cannot be confused.
     let window = if app.paused() {
@@ -453,31 +496,29 @@ fn summary_net(app: &App, u: usize) -> Line<'static> {
                 dim(),
             ),
         ],
-        vec![
-            Span::styled("LOAD ", dim()),
-            // Only the first figure is a reading of now; the other two are
-            // where it came from, and colouring them would say the machine is
-            // in trouble it has already left.
-            Span::styled(
-                pad_num(&format!("{:.2}", host.load[0]), 5),
-                style_for(read.load, plain()),
-            ),
-            Span::styled(
-                format!(
-                    " {} {}",
-                    pad_num(&format!("{:.2}", host.load[1]), 5),
-                    pad_num(&format!("{:.2}", host.load[2]), 5)
-                ),
-                plain(),
-            ),
-        ],
+        wait_segment(app),
     ];
-    let mut spans: Vec<Span<'static>> = Vec::new();
+    // The list above is the order the segments are DRAWN in, left to right.
+    // This is the order they GIVE WAY in, as indices into it: the machine's own
+    // state is kept longest and the network rates go first (D-46, operator
+    // 2026-08-30). Every other figure of the header stands somewhere else on
+    // the screen as well - the network rates are a column on every row - and
+    // the three shares of time stand nowhere else at all. At 100 cells, which
+    // is the width the live check draws at, the line has 85 cells for segments
+    // wanting 93, so exactly one of the three has to go.
+    const GIVE_WAY: [usize; 3] = [2, 1, 0];
     let mut used = 0usize;
-    for segment in segments {
-        let len: usize = segment.iter().map(|s| str_width(&s.content)).sum();
+    let mut kept = [false; 3];
+    for &i in GIVE_WAY.iter() {
+        let len: usize = segments[i].iter().map(|s| str_width(&s.content)).sum();
         if used + len + reserve <= u {
             used += len;
+            kept[i] = true;
+        }
+    }
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (i, segment) in segments.into_iter().enumerate() {
+        if kept[i] {
             spans.extend(segment);
         }
     }
@@ -649,7 +690,7 @@ fn table_lines(app: &App, rows: &[Row], u: usize, content: usize, out: &mut Vec<
                 spans.extend(marked(row_owner(&r.node, &cols), &needle, base));
                 spans.push(Span::styled(
                     pad_left(&or_na(m.tasks, |t| format!("{t:.0}")), cols.tasks),
-                    style_for(read.tasks, base),
+                    base,
                 ));
                 let value =
                     |text: String, sort: Sort, reading: Reading, spans: &mut Vec<Span<'static>>| {
@@ -1427,6 +1468,7 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
         &node.avg,
         &limits,
         node.detail.state.unwrap_or('?'),
+        node.detail.ceilings,
         node.kind == Kind::Host,
     );
     if !found.is_empty() {
@@ -1643,6 +1685,66 @@ mod tests {
     use crate::model::Snapshot;
     use ratatui::style::Color;
 
+    /// The machine is read as three shares of time and not as a queue length
+    /// (D-46). A load average of 8 is a full machine on eight cores and an idle
+    /// one on two hundred, so it cannot be carried from one host to the next;
+    /// a share of time waiting is the same quantity on both.
+    #[test]
+    fn the_header_reads_the_machine_as_three_shares_of_time() {
+        use crate::model::{Pressure, Stall};
+        let mut snap = Snapshot::empty();
+        snap.host.cores = 4.0;
+        snap.host.load = [9.0, 8.0, 7.0];
+        snap.host.pressure = Pressure {
+            cpu: Stall {
+                some10: Some(31.5),
+                some60: Some(12.0),
+                ..Stall::default()
+            },
+            mem: Stall {
+                some10: Some(0.0),
+                some60: Some(0.0),
+                full10: Some(4.0),
+                ..Stall::default()
+            },
+            io: Stall {
+                some10: Some(2.25),
+                some60: Some(1.0),
+                ..Stall::default()
+            },
+        };
+        // The window follows the mode the rest of the screen is in: the kernel
+        // keeps a ten and a sixty second average, and the screen has two
+        // windows of its own (FR-13).
+        let mut app = App::new(snap);
+        let text = to_text(&frame(&app, 110, 30)).join("\n");
+        assert!(text.contains("cpu  12%"), "the sixty second window: {text}");
+        app.on_key(crate::app::Key::Char('a'), std::path::Path::new("/proc"));
+        let text = to_text(&frame(&app, 110, 30)).join("\n");
+        assert!(text.contains("WAIT"), "{text}");
+        for want in ["cpu  32%", "mem   0%", "io    2%"] {
+            assert!(text.contains(want), "the header does not say {want:?}");
+        }
+        assert!(
+            !text.contains("LOAD"),
+            "the load average is not on the screen any more"
+        );
+        assert!(!text.contains("9.00"), "and neither is its figure");
+
+        // A kernel that does not export pressure leaves three unavailable
+        // figures, and nothing takes their place (D-13, settled 2026-08-30).
+        let mut bare = Snapshot::empty();
+        bare.host.cores = 4.0;
+        bare.host.load = [9.0, 8.0, 7.0];
+        let text = to_text(&frame(&App::new(bare), 110, 30)).join("\n");
+        assert!(text.contains("WAIT"), "{text}");
+        assert!(text.contains("cpu  n/a"), "{text}");
+        assert!(
+            !text.contains("9.00"),
+            "the load average does not come back"
+        );
+    }
+
     /// The header must not move under its own numbers. Every figure in it
     /// changes on every tick, and a figure that grows by a digit pushes
     /// everything to its right by a cell - so the label the eye was resting on
@@ -1669,7 +1771,7 @@ mod tests {
             h.load = [0.07 * scale, 0.4 * scale, 2.0 * scale];
             let app = App::new(snap);
             let text = to_text(&frame(&app, 110, 30));
-            ["MEM", "SWAP", "LOAD"]
+            ["MEM", "SWAP", "WAIT"]
                 .iter()
                 .map(|needle| {
                     let line = text
@@ -1857,12 +1959,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("no cell {want} on screen"))
                 .style
         };
-        assert_eq!(styled("9.00").fg, Some(t.signal), "the load");
         assert_eq!(styled("7.6G").fg, Some(t.signal), "the memory");
         assert_eq!(styled("1.4G").fg, Some(t.signal), "the swap");
-        // The other two are where the load came from, not where it is, and
-        // they keep the colour they always had.
-        assert_ne!(styled("0.10  0.10").fg, Some(t.signal));
     }
 
     /// A row whose figures are all its children's is the way down to the
@@ -1994,12 +2092,19 @@ mod tests {
         n.avg = n.instant;
         n.detail.state = Some('Z');
         n.detail.pid = Some(1);
+        // A row is read by what does not depend on the machine (D-45): the
+        // busy cores, what the kernel says the process is doing, and the
+        // ceilings its control group was held against.
+        n.detail.ceilings = crate::model::Ceilings {
+            throttled: true,
+            ..crate::model::Ceilings::default()
+        };
         snap.root.children.push(n);
         let mut app = App::new(snap);
         app.on_key(crate::app::Key::Char('i'), std::path::Path::new("/proc"));
         let text = to_text(&frame(&app, 100, 40));
         let joined = text.join("\n");
-        for want in ["zombie", "cpu", "memory", "2.500", "30%", "25%"] {
+        for want in ["zombie", "cpu", "throttled", "2.500", "control group"] {
             assert!(joined.contains(want), "the card does not say {want:?}");
         }
         // Above the figures, not under them: a card that does not fit is cut
@@ -2367,5 +2472,101 @@ mod tests {
         // A word with no space in it is broken where the room ends: a path
         // would otherwise be cut after all.
         assert_eq!(wrap("/very/long/path", 5), vec!["/very", "/long", "/path"]);
+    }
+
+    /// The colour of a pressure figure comes from `some` and never from
+    /// `full` (D-46). Measured on the reference host on 2026-08-30: an idle
+    /// machine reads `io full avg10` 0.16, so a step at any positive `full`
+    /// would mark a healthy host; and `cpu full` at machine level is zero
+    /// whatever the machine is doing, so the processor would never be marked
+    /// at all.
+    #[test]
+    fn a_quiet_machine_is_not_marked_and_a_waiting_one_is() {
+        use crate::model::{Pressure, Stall};
+        let stall = |some: f64, full: f64| Stall {
+            some10: Some(some),
+            some60: Some(some),
+            full10: Some(full),
+            full60: Some(full),
+        };
+        let mut snap = Snapshot::empty();
+        snap.host.cores = 6.0;
+        snap.host.pressure = Pressure {
+            cpu: stall(41.42, 0.0),
+            mem: stall(0.0, 0.0),
+            io: stall(0.16, 0.16),
+        };
+        let lines = frame(&App::new(snap), 110, 30);
+        let t = crate::theme::current();
+        let mut colours: Vec<Option<Color>> = Vec::new();
+        for line in &lines {
+            if !line.spans.iter().any(|s| s.content.as_ref() == "WAIT ") {
+                continue;
+            }
+            for (i, s) in line.spans.iter().enumerate() {
+                if matches!(s.content.as_ref(), "cpu " | "mem " | "io  ") {
+                    colours.push(line.spans[i + 1].style.fg);
+                }
+            }
+        }
+        assert_eq!(colours.len(), 3, "the header carries three figures");
+        assert_eq!(
+            colours[0],
+            Some(t.signal),
+            "41 percent of time waiting for the processor is an alarm"
+        );
+        assert_eq!(
+            colours[2],
+            plain().fg,
+            "an idle machine carries no mark, whatever `io full` reads"
+        );
+    }
+
+    /// The width the live check draws at is 100 cells, and the header must
+    /// carry the machine there. The frame tests all drew at 110, where the
+    /// second summary line has room for everything; at 100 it has 85 cells for
+    /// segments wanting 93, and the last one is dropped (D-39). That is how the
+    /// three pressure figures left the screen on a real host while every unit
+    /// test passed.
+    #[test]
+    fn the_header_carries_the_machine_at_the_width_the_live_check_draws_at() {
+        use crate::model::{Pressure, Stall};
+        let mut snap = Snapshot::empty();
+        snap.host.cores = 6.0;
+        snap.host.mem_total = 16.0 * 1024.0 * 1024.0 * 1024.0;
+        snap.host.mem_used = 2.0 * 1024.0 * 1024.0 * 1024.0;
+        snap.host.swap_total = 4.0 * 1024.0 * 1024.0 * 1024.0;
+        snap.host.swap_used = 1.0 * 1024.0 * 1024.0 * 1024.0;
+        snap.host.net_rx = 2459.0;
+        snap.host.net_tx = 9522.0;
+        snap.host.pressure = Pressure {
+            cpu: Stall {
+                some10: Some(41.42),
+                some60: Some(41.42),
+                ..Stall::default()
+            },
+            ..Pressure::default()
+        };
+        // The second summary line, which is where the three segments compete.
+        let line = |w: u16| to_text(&frame(&App::new(snap.clone()), w, 30))[2].clone();
+        let narrow = line(100);
+        assert!(
+            narrow.contains("WAIT"),
+            "the machine is not on a 100 cell screen:\n{narrow}"
+        );
+        // What gives way instead. The network rates are a column on every row
+        // of the table; the three shares of time stand nowhere else (D-46).
+        assert!(
+            !narrow.contains("NET"),
+            "both cannot fit at 100 cells, and the rates are the ones to go:\n{narrow}"
+        );
+        // Ten cells more and nothing has to go at all.
+        let wide = line(110);
+        for want in ["WAIT", "NET", "SWAP"] {
+            assert!(
+                wide.contains(want),
+                "{want:?} left a 110 cell screen:\n{wide}"
+            );
+        }
     }
 }

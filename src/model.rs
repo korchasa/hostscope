@@ -182,6 +182,59 @@ fn opt_sub(a: Option<f64>, b: Option<f64>) -> Option<f64> {
 /// How a figure reads against the machine it was taken on. Three steps only:
 /// the eye has to sort a screen of rows in a second, and a scale with more
 /// steps than that is read by counting rather than at a glance (D-42).
+/// What a row's control group was held against during the tick. Every one of
+/// these is a fact and not a figure: the cgroup keeps a running count, and what
+/// the screen reads is the growth between two ticks (D-45).
+///
+/// These are the only readings of a row that mean the same on a machine with
+/// one core and on a machine with two hundred. The ceiling was set for this
+/// group by whoever started it, so it does not move when the box does - unlike
+/// a share of `MemTotal` or of `pid_max`, which D-45 removed for exactly that
+/// reason.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Ceilings {
+    /// The scheduler cut a period short because the group had spent its CPU
+    /// quota. Invisible in every other tool on the host.
+    pub throttled: bool,
+    /// A process of the group was killed for memory.
+    pub oom_kill: bool,
+    /// The group was pushed back against its memory limit. It happens before
+    /// the killing does.
+    pub mem_ceiling: bool,
+    /// A fork was refused against the group's pid limit.
+    pub pid_ceiling: bool,
+}
+
+/// How long something waited for one resource, as the kernel's pressure stall
+/// information reports it (D-46).
+///
+/// Every figure is a share of time between 0 and 100, which is why this is the
+/// one reading of a machine that can be compared with another machine: a load
+/// average of 8 is a full machine on eight cores and an idle one on two
+/// hundred, while 8 percent of time spent waiting is 8 percent of time either
+/// way.
+///
+/// `some` is the share of time at least one task was stalled; `full` the share
+/// where every non-idle task was stalled at once, which the kernel's own
+/// documentation calls thrashing. At the machine level `full` for the processor
+/// is undefined and the kernel writes zero there, so only `some` is read for
+/// the CPU.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Stall {
+    pub some10: Option<f64>,
+    pub some60: Option<f64>,
+    pub full10: Option<f64>,
+    pub full60: Option<f64>,
+}
+
+/// The three resources the kernel keeps pressure for.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Pressure {
+    pub cpu: Stall,
+    pub mem: Stall,
+    pub io: Stall,
+}
+
 /// The order of the variants is the order of severity, and `derive` turns it
 /// into the comparison the row flag folds over.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
@@ -235,9 +288,6 @@ pub struct Limits {
     pub cores: f64,
     pub mem_total: f64,
     pub swap_total: f64,
-    /// `/proc/sys/kernel/pid_max`. Absent where the file cannot be read, and
-    /// then the task count carries no reading at all.
-    pub pid_max: Option<f64>,
     /// The summed speed of the physical links, in bytes per second. Absent
     /// where no interface reports one - a virtual machine often reports
     /// nothing - and then the network carries no reading.
@@ -252,7 +302,6 @@ pub struct Readings {
     pub cpu: Reading,
     pub mem: Reading,
     pub swap: Reading,
-    pub tasks: Reading,
     pub rx: Reading,
     pub tx: Reading,
     /// The worst of the figures above, and of what the kernel says the process
@@ -284,8 +333,8 @@ impl Readings {
     /// true for the root, which is the only row whose network can be compared
     /// against the link of the machine - every row below it counts bytes
     /// inside its own namespace (D-42).
-    pub fn of(m: &Metrics, l: &Limits, state: char, is_host: bool) -> Readings {
-        Readings::read(m, l, state, is_host).0
+    pub fn of(m: &Metrics, l: &Limits, state: char, held: Ceilings, is_host: bool) -> Readings {
+        Readings::read(m, l, state, held, is_host).0
     }
 
     /// The heuristics that fired on this row, in the order the card prints
@@ -299,10 +348,11 @@ impl Readings {
         avg: &Metrics,
         l: &Limits,
         state: char,
+        held: Ceilings,
         is_host: bool,
     ) -> Vec<Finding> {
-        let a = Readings::read(now, l, state, is_host).1;
-        let b = Readings::read(avg, l, state, is_host).1;
+        let a = Readings::read(now, l, state, held, is_host).1;
+        let b = Readings::read(avg, l, state, held, is_host).1;
         let mut names: Vec<&'static str> = Vec::new();
         for r in a.iter().chain(b.iter()) {
             if !names.contains(&r.name) {
@@ -355,8 +405,57 @@ impl Readings {
     /// The reading and its reasons come out of one function, so a threshold
     /// cannot move in the figure and stay in the sentence - which is the way a
     /// card goes stale without anybody noticing (D-43).
-    fn read(m: &Metrics, l: &Limits, state: char, is_host: bool) -> (Readings, Vec<Raw>) {
+    fn read(
+        m: &Metrics,
+        l: &Limits,
+        state: char,
+        held: Ceilings,
+        is_host: bool,
+    ) -> (Readings, Vec<Raw>) {
         let mut found = Vec::new();
+
+        // The ceilings the group was held against during the tick. They come
+        // before everything else for the same reason the state letter does:
+        // they are facts, not comparisons, and the reader who sees one has no
+        // threshold to disagree with (D-45). Each sentence says the ceiling
+        // belongs to the control group and not to the process on the row - the
+        // discipline D-43 fixed when the swap reason had to say "over the
+        // subtree".
+        let mut from_held = Reading::Calm;
+        for (hit, name, reading, rule) in [
+            (
+                held.oom_kill,
+                "killed for memory",
+                Reading::Alarm,
+                "a process of this control group was killed for memory during the tick",
+            ),
+            (
+                held.pid_ceiling,
+                "pid ceiling",
+                Reading::Alarm,
+                "a fork in this control group was refused against its pid limit, \
+                 so a process that should be running is not",
+            ),
+            (
+                held.throttled,
+                "throttled",
+                Reading::Unusual,
+                "this control group spent its CPU quota and the scheduler held it back, \
+                 which is why the row can be slow while the processor looks idle",
+            ),
+            (
+                held.mem_ceiling,
+                "memory ceiling",
+                Reading::Unusual,
+                "this control group was pushed back against its memory limit, \
+                 which is what happens before anything is killed",
+            ),
+        ] {
+            if hit {
+                found.push(fact(name, reading, rule));
+                from_held = from_held.max(reading);
+            }
+        }
 
         // Two of the letters the kernel writes are readings a figure cannot
         // give: a zombie holds a slot its parent is not reaping, and an
@@ -419,48 +518,22 @@ impl Readings {
             (
                 // The same two steps the bar has always drawn on the CPU
                 // column, so a busy core reads the same whichever way the
-                // screen is sorted.
+                // screen is sorted. A busy core is a busy core on a machine
+                // with one of them and on a machine with two hundred, which is
+                // why this is the only figure a row is still read by (D-45).
                 above(&mut found, "cpu", m.cpu, 1.0, 0.1),
-                // "with children", because the card row beside it is `memory
-                // RSS`, which is the subtree too - and RSS counts a shared page
-                // in full for every process that maps it, so this share can
-                // stand above what the machine reports for itself.
-                share_of(
-                    &mut found,
-                    "memory",
-                    ", with children",
-                    m.mem,
-                    l.mem_total,
-                    0.25,
-                    0.10,
-                    &mem_str,
-                ),
-                // Swap holds one step on a row: what matters there is that this
-                // process is the one being swapped out, not how far the device
-                // has filled. It is the swap of the whole subtree, and the card
-                // row `own swap` beside it is not - so the sentence says which.
-                share_of(
-                    &mut found,
-                    "swap",
-                    ", over the subtree",
-                    m.swap,
-                    l.swap_total,
-                    f64::INFINITY,
-                    0.10,
-                    &mem_str,
-                ),
+                // Memory and swap are not read on a row at all. Both used to be
+                // a share of a whole somebody chose - the RAM the box happens
+                // to have, the size of the swap device - so the same process
+                // read calm on one machine and marked on the next, and the
+                // memory figure was the sum of a subtree with every shared page
+                // counted once per process on top of that. What replaced them
+                // is the ceiling the group was actually held against (D-45).
+                Reading::Calm,
+                Reading::Calm,
             )
         };
-        let tasks = share_of(
-            &mut found,
-            "tasks",
-            "",
-            m.tasks,
-            l.pid_max.unwrap_or(0.0),
-            f64::INFINITY,
-            0.10,
-            &|v| format!("{v:.0}"),
-        );
+
         // Only the host row can be compared against the link of the machine
         // (D-42), and one card row holds both directions, so both take its
         // label.
@@ -491,12 +564,11 @@ impl Readings {
             cpu,
             mem,
             swap,
-            tasks,
             rx,
             tx,
-            flag: [cpu, mem, swap, tasks, rx, tx]
+            flag: [cpu, mem, swap, rx, tx]
                 .into_iter()
-                .fold(from_state, Reading::max),
+                .fold(from_state.max(from_held), Reading::max),
         };
         (r, found)
     }
@@ -504,13 +576,16 @@ impl Readings {
 
 /// The order the card prints its rows in, which is the order the reasons take:
 /// a reader running down the block finds each name again further down the card.
-const ORDER: [&str; 7] = [
+const ORDER: [&str; 10] = [
+    "killed for memory",
+    "pid ceiling",
     "zombie",
+    "throttled",
+    "memory ceiling",
     "stuck in kernel",
     "cpu",
     "memory",
     "swap",
-    "tasks",
     "net",
 ];
 
@@ -618,22 +693,39 @@ fn pct(f: f64) -> String {
 /// the used memory the kernel reports for the whole host (D-42).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct HostReadings {
-    pub load: Reading,
     pub mem: Reading,
     pub swap: Reading,
 }
 
 impl HostReadings {
-    pub fn of(load1: f64, mem_used: f64, swap_used: f64, l: &Limits) -> HostReadings {
+    pub fn of(mem_used: f64, swap_used: f64, l: &Limits) -> HostReadings {
         HostReadings {
-            // Load is a queue length, so it is read per core: on a machine of
-            // four, a load of four is a full machine and not a fault.
-            load: share(Some(load1), l.cores, 2.0, 1.0),
             mem: share(Some(mem_used), l.mem_total, 0.90, 0.75),
             // Not "any swap at all": on a host that has swapped once, that
             // fires forever and tells the reader nothing.
             swap: share(Some(swap_used), l.swap_total, 0.50, 0.10),
         }
+    }
+}
+
+/// How one of the machine's three pressure figures reads.
+///
+/// Both steps sit on `some` - the share of time at least one task was stalled.
+/// `full` cannot carry the reading: at machine level the kernel leaves the
+/// processor's `full` at zero whatever the machine is doing, and on the
+/// reference host on 2026-08-30 an idle machine read `io full avg10` 0.16, so
+/// a step at any positive `full` marks a healthy host and never marks a busy
+/// processor.
+///
+/// The steps are measured, not chosen. On the same host and day an idle
+/// machine read `cpu some avg10` 0.47 and 24 busy threads on 6 cores read
+/// 41.42, so 10 stands clear of the quiet machine and 40 marks one that is
+/// genuinely waiting (D-46).
+pub fn pressure_reading(some: Option<f64>) -> Reading {
+    match some {
+        Some(v) if v >= 40.0 => Reading::Alarm,
+        Some(v) if v >= 10.0 => Reading::Unusual,
+        _ => Reading::Calm,
     }
 }
 
@@ -687,6 +779,11 @@ pub struct Detail {
     /// Absent on the host row and on a `(self)` remainder, neither of which is
     /// a process.
     pub state: Option<char>,
+    /// What the control group of this row was held against during the tick
+    /// (D-45). It belongs to the group and not to the single process, so every
+    /// row the group owns carries the same value, and the card says whose
+    /// ceiling it is.
+    pub ceilings: Ceilings,
     /// What runs this process, read from its cgroup (FR-20).
     pub owner: Option<Owner>,
     /// The chain of processes this row stands for, in order down it: each link
@@ -747,6 +844,7 @@ impl Node {
             self.metrics(mode),
             limits,
             self.detail.state.unwrap_or('?'),
+            self.detail.ceilings,
             self.kind == Kind::Host,
         )
     }
@@ -773,6 +871,7 @@ impl Node {
             &own,
             limits,
             self.detail.state.unwrap_or('?'),
+            self.detail.ceilings,
             self.kind == Kind::Host,
         )
         .flag;
@@ -866,6 +965,10 @@ pub enum Mode {
 /// attributed.
 #[derive(Clone, Debug, Default)]
 pub struct HostSummary {
+    /// What the machine waited for, as a share of time (D-46). It replaced the
+    /// load average in the header because a queue length cannot be compared
+    /// between two machines and a share of time can.
+    pub pressure: Pressure,
     pub hostname: String,
     pub kernel: String,
     pub uptime_secs: f64,
@@ -1056,7 +1159,6 @@ mod tests {
             cores: 4.0,
             mem_total: 8.0 * GIB,
             swap_total: 2.0 * GIB,
-            pid_max: Some(32768.0),
             link_speed: Some(125_000_000.0),
         }
     }
@@ -1071,28 +1173,22 @@ mod tests {
         };
         // The CPU rule is the one the bar already applies, strictly greater.
         assert_eq!(
-            Readings::of(&m(1.35, 0.0), &l, 'S', false).cpu,
+            Readings::of(&m(1.35, 0.0), &l, 'S', Ceilings::default(), false).cpu,
             Reading::Alarm
         );
         assert_eq!(
-            Readings::of(&m(1.0, 0.0), &l, 'S', false).cpu,
+            Readings::of(&m(1.0, 0.0), &l, 'S', Ceilings::default(), false).cpu,
             Reading::Unusual
         );
         assert_eq!(
-            Readings::of(&m(0.06, 0.0), &l, 'S', false).cpu,
+            Readings::of(&m(0.06, 0.0), &l, 'S', Ceilings::default(), false).cpu,
             Reading::Calm
         );
-        // Memory is a share of the RAM this machine has.
+        // Memory says nothing on a row, whatever the figure: what the reader
+        // wants to know is whether the process was held against a ceiling, and
+        // a share of this machine's RAM does not answer that (D-45).
         assert_eq!(
-            Readings::of(&m(0.0, 4.6 * GIB), &l, 'S', false).mem,
-            Reading::Alarm
-        );
-        assert_eq!(
-            Readings::of(&m(0.0, 1.2 * GIB), &l, 'S', false).mem,
-            Reading::Unusual
-        );
-        assert_eq!(
-            Readings::of(&m(0.0, 0.4 * GIB), &l, 'S', false).mem,
+            Readings::of(&m(0.0, 4.6 * GIB), &l, 'S', Ceilings::default(), false).mem,
             Reading::Calm
         );
     }
@@ -1101,9 +1197,165 @@ mod tests {
     fn the_kernel_reports_a_state_and_that_needs_no_threshold() {
         let l = a_machine();
         let quiet = Metrics::default();
-        assert_eq!(Readings::of(&quiet, &l, 'Z', false).flag, Reading::Alarm);
-        assert_eq!(Readings::of(&quiet, &l, 'D', false).flag, Reading::Unusual);
-        assert_eq!(Readings::of(&quiet, &l, 'S', false).flag, Reading::Calm);
+        assert_eq!(
+            Readings::of(&quiet, &l, 'Z', Ceilings::default(), false).flag,
+            Reading::Alarm
+        );
+        assert_eq!(
+            Readings::of(&quiet, &l, 'D', Ceilings::default(), false).flag,
+            Reading::Unusual
+        );
+        assert_eq!(
+            Readings::of(&quiet, &l, 'S', Ceilings::default(), false).flag,
+            Reading::Calm
+        );
+    }
+
+    /// The four counters a cgroup keeps about its own ceilings are facts of the
+    /// same kind as the state letter: the counter grew during the tick, or it
+    /// did not. They are the only reading of a row that means the same on a
+    /// machine with one core and on one with two hundred, because the ceiling
+    /// was set for this group and not by the size of the box (D-45).
+    #[test]
+    fn each_ceiling_has_its_own_name_and_sentence() {
+        let l = a_machine();
+        let quiet = Metrics::default();
+        let held = |c: Ceilings| Readings::of(&quiet, &l, 'S', c, false).flag;
+        assert_eq!(
+            held(Ceilings {
+                throttled: true,
+                ..Ceilings::default()
+            }),
+            Reading::Unusual,
+            "held back by its quota"
+        );
+        assert_eq!(
+            held(Ceilings {
+                mem_ceiling: true,
+                ..Ceilings::default()
+            }),
+            Reading::Unusual,
+            "pushed back on its memory limit"
+        );
+        assert_eq!(
+            held(Ceilings {
+                oom_kill: true,
+                ..Ceilings::default()
+            }),
+            Reading::Alarm,
+            "killed for memory"
+        );
+        assert_eq!(
+            held(Ceilings {
+                pid_ceiling: true,
+                ..Ceilings::default()
+            }),
+            Reading::Alarm,
+            "a fork that was refused is a process that did not start"
+        );
+
+        // Each carries its own line in the card, and every line says the
+        // ceiling belongs to the control group and not to the process on the
+        // row - the same discipline D-43 fixed for "with children".
+        let all = Ceilings {
+            throttled: true,
+            oom_kill: true,
+            mem_ceiling: true,
+            pid_ceiling: true,
+        };
+        let found = Readings::findings(&quiet, &quiet, &l, 'S', all, false);
+        let names: Vec<&str> = found.iter().map(|f| f.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "killed for memory",
+                "pid ceiling",
+                "throttled",
+                "memory ceiling"
+            ],
+            "the worst first, and each named once"
+        );
+        for f in &found {
+            assert!(
+                f.why.contains("control group"),
+                "{} does not say whose ceiling it is: {}",
+                f.name,
+                f.why
+            );
+        }
+    }
+
+    /// A counter is a running total, so a group throttled an hour ago is not a
+    /// group being throttled now. The reading is the growth between two ticks,
+    /// and where nothing grew there is nothing to say (D-45).
+    #[test]
+    fn a_counter_that_did_not_grow_raises_nothing() {
+        let l = a_machine();
+        let quiet = Metrics::default();
+        let r = Readings::of(&quiet, &l, 'S', Ceilings::default(), false);
+        assert_eq!(r.flag, Reading::Calm);
+        assert!(Readings::findings(&quiet, &quiet, &l, 'S', Ceilings::default(), false).is_empty());
+    }
+
+    /// What a process row is read by, after D-45 took away everything whose
+    /// denominator somebody chose. Memory against `MemTotal`, swap against the
+    /// swap device and tasks against `pid_max` all said different things on
+    /// different machines, and the last of them could not fire at all: on a
+    /// host where `pid_max` is 4194304 the step stood at 419430 tasks against
+    /// 558 running.
+    ///
+    /// The host row keeps all three, because there the denominator is the
+    /// machine itself and the figure is what the machine says about itself.
+    #[test]
+    fn a_process_row_is_read_only_by_what_does_not_depend_on_the_machine() {
+        let l = a_machine();
+        let heavy = Metrics {
+            mem: Some(7.9 * GIB),
+            swap: Some(3.9 * GIB),
+            tasks: Some(4_000_000.0),
+            ..Metrics::default()
+        };
+        let row = Readings::of(&heavy, &l, 'S', Ceilings::default(), false);
+        assert_eq!(row.mem, Reading::Calm, "memory is not read on a row");
+        assert_eq!(row.swap, Reading::Calm, "swap is not read on a row");
+        assert_eq!(row.flag, Reading::Calm, "so the row carries no mark");
+        assert!(
+            Readings::findings(&heavy, &heavy, &l, 'S', Ceilings::default(), false).is_empty(),
+            "and the card has nothing to explain"
+        );
+
+        let machine = Readings::of(&heavy, &l, '?', Ceilings::default(), true);
+        assert_eq!(
+            machine.mem,
+            Reading::Alarm,
+            "the machine still reads its own"
+        );
+        assert_eq!(machine.swap, Reading::Alarm);
+    }
+
+    /// The task count is a figure on the screen and not a reading of anything.
+    /// It used to be a tenth of `pid_max`, and `pid_max` is a number an
+    /// administrator picks: on the reference host it is 4194304, which put the
+    /// step at 419430 tasks against 558 running. A rule that cannot fire on any
+    /// machine of this decade is not a quiet rule, it is a wrong one, and what
+    /// a group actually hits is `pids.max` of its own cgroup - a fact now, not
+    /// a share (D-45).
+    #[test]
+    fn the_task_count_is_a_figure_and_not_a_reading() {
+        let l = a_machine();
+        let swarm = Metrics {
+            tasks: Some(4_000_000.0),
+            ..Metrics::default()
+        };
+        for is_host in [true, false] {
+            let r = Readings::of(&swarm, &l, '?', Ceilings::default(), is_host);
+            assert_eq!(r.flag, Reading::Calm, "is_host = {is_host}");
+            assert!(
+                Readings::findings(&swarm, &swarm, &l, '?', Ceilings::default(), is_host)
+                    .is_empty(),
+                "is_host = {is_host}"
+            );
+        }
     }
 
     #[test]
@@ -1113,7 +1365,10 @@ mod tests {
             cpu: Some(1.35),
             ..Metrics::default()
         };
-        assert_eq!(Readings::of(&hot, &l, 'S', false).flag, Reading::Alarm);
+        assert_eq!(
+            Readings::of(&hot, &l, 'S', Ceilings::default(), false).flag,
+            Reading::Alarm
+        );
     }
 
     #[test]
@@ -1126,19 +1381,39 @@ mod tests {
             mem: Some(4.0 * GIB),
             ..Metrics::default()
         };
-        assert_eq!(Readings::of(&busy, &l, '?', true).cpu, Reading::Calm);
-        assert_eq!(Readings::of(&busy, &l, '?', true).mem, Reading::Calm);
-        // The same figures on a process are what the row rules are for.
-        assert_eq!(Readings::of(&busy, &l, 'S', false).cpu, Reading::Alarm);
-        assert_eq!(Readings::of(&busy, &l, 'S', false).mem, Reading::Alarm);
+        assert_eq!(
+            Readings::of(&busy, &l, '?', Ceilings::default(), true).cpu,
+            Reading::Calm
+        );
+        assert_eq!(
+            Readings::of(&busy, &l, '?', Ceilings::default(), true).mem,
+            Reading::Calm
+        );
+        // The same CPU figure on a process is what the row rule is for. Memory
+        // is not read on a row any more, so the contrast lives on the one
+        // figure a row still carries (D-45).
+        assert_eq!(
+            Readings::of(&busy, &l, 'S', Ceilings::default(), false).cpu,
+            Reading::Alarm
+        );
+        assert_eq!(
+            Readings::of(&busy, &l, 'S', Ceilings::default(), false).mem,
+            Reading::Calm
+        );
         // A machine with nothing left is still read, by its own thresholds.
         let full = Metrics {
             cpu: Some(3.8),
             mem: Some(7.5 * GIB),
             ..Metrics::default()
         };
-        assert_eq!(Readings::of(&full, &l, '?', true).cpu, Reading::Alarm);
-        assert_eq!(Readings::of(&full, &l, '?', true).mem, Reading::Alarm);
+        assert_eq!(
+            Readings::of(&full, &l, '?', Ceilings::default(), true).cpu,
+            Reading::Alarm
+        );
+        assert_eq!(
+            Readings::of(&full, &l, '?', Ceilings::default(), true).mem,
+            Reading::Alarm
+        );
     }
 
     #[test]
@@ -1150,10 +1425,16 @@ mod tests {
             ..Metrics::default()
         };
         // 108 MB/s of a 125 MB/s link is 86 percent.
-        assert_eq!(Readings::of(&loud, &l, 'S', true).rx, Reading::Alarm);
+        assert_eq!(
+            Readings::of(&loud, &l, 'S', Ceilings::default(), true).rx,
+            Reading::Alarm
+        );
         // A row below the host counts bytes inside its own namespace, so the
         // link of the machine is not the whole it is a share of (D-42).
-        assert_eq!(Readings::of(&loud, &l, 'S', false).rx, Reading::Calm);
+        assert_eq!(
+            Readings::of(&loud, &l, 'S', Ceilings::default(), false).rx,
+            Reading::Calm
+        );
     }
 
     #[test]
@@ -1166,7 +1447,10 @@ mod tests {
             rx: Some(108_000_000.0),
             ..Metrics::default()
         };
-        assert_eq!(Readings::of(&loud, &l, 'S', true).rx, Reading::Calm);
+        assert_eq!(
+            Readings::of(&loud, &l, 'S', Ceilings::default(), true).rx,
+            Reading::Calm
+        );
     }
 
     #[test]
@@ -1269,32 +1553,14 @@ mod tests {
     fn the_machine_reads_its_own_summary_against_what_it_has() {
         let l = a_machine();
         // Load is per core, so 4 cores carry 4.0 without a word.
-        assert_eq!(HostReadings::of(9.0, 0.0, 0.0, &l).load, Reading::Alarm);
-        assert_eq!(HostReadings::of(5.0, 0.0, 0.0, &l).load, Reading::Unusual);
-        assert_eq!(HostReadings::of(2.0, 0.0, 0.0, &l).load, Reading::Calm);
-        assert_eq!(
-            HostReadings::of(0.0, 7.5 * GIB, 0.0, &l).mem,
-            Reading::Alarm
-        );
-        assert_eq!(
-            HostReadings::of(0.0, 6.2 * GIB, 0.0, &l).mem,
-            Reading::Unusual
-        );
-        assert_eq!(HostReadings::of(0.0, 4.0 * GIB, 0.0, &l).mem, Reading::Calm);
+        assert_eq!(HostReadings::of(7.5 * GIB, 0.0, &l).mem, Reading::Alarm);
+        assert_eq!(HostReadings::of(6.2 * GIB, 0.0, &l).mem, Reading::Unusual);
+        assert_eq!(HostReadings::of(4.0 * GIB, 0.0, &l).mem, Reading::Calm);
         // Any swap at all is not the rule: on a host that has swapped once it
         // fires forever and says nothing.
-        assert_eq!(
-            HostReadings::of(0.0, 0.0, 1.5 * GIB, &l).swap,
-            Reading::Alarm
-        );
-        assert_eq!(
-            HostReadings::of(0.0, 0.0, 0.5 * GIB, &l).swap,
-            Reading::Unusual
-        );
-        assert_eq!(
-            HostReadings::of(0.0, 0.0, 0.05 * GIB, &l).swap,
-            Reading::Calm
-        );
+        assert_eq!(HostReadings::of(0.0, 1.5 * GIB, &l).swap, Reading::Alarm);
+        assert_eq!(HostReadings::of(0.0, 0.5 * GIB, &l).swap, Reading::Unusual);
+        assert_eq!(HostReadings::of(0.0, 0.05 * GIB, &l).swap, Reading::Calm);
     }
 
     #[test]
@@ -1305,21 +1571,32 @@ mod tests {
             mem: Some(2.4 * GIB),
             ..Metrics::default()
         };
-        let found = Readings::findings(&now, &now, &l, 'Z', false);
+        let found = Readings::findings(&now, &now, &l, 'Z', Ceilings::default(), false);
         let names: Vec<&str> = found.iter().map(|f| f.name).collect();
         // The name of a heuristic is the label of the card row its figure
         // stands on, so the reader can find the number the sentence is about
         // (D-43). A name nobody can look up is what made the first block
         // unreadable on a live host.
-        assert_eq!(names, vec!["zombie", "cpu", "memory"]);
+        assert_eq!(names, vec!["zombie", "cpu"]);
         for f in &found {
             assert!(f.name.len() <= 16, "{} is too wide for the label", f.name);
             assert!(f.reading != Reading::Calm, "{} did not fire", f.name);
         }
         assert!(found[1].why.contains("2.500"), "{}", found[1].why);
         assert!(found[1].why.contains("1.000"), "{}", found[1].why);
-        assert!(found[2].why.contains("30%"), "{}", found[2].why);
-        assert!(found[2].why.contains("25%"), "{}", found[2].why);
+        // The machine reads its own memory, and there the sentence still names
+        // the share and the step it crossed.
+        let heavy = Metrics {
+            mem: Some(6.2 * GIB),
+            ..Metrics::default()
+        };
+        let host = Readings::findings(&heavy, &heavy, &l, '?', Ceilings::default(), true);
+        let mem = host
+            .iter()
+            .find(|f| f.name == "memory")
+            .expect("the machine reads its memory");
+        assert!(mem.why.contains("78%"), "{}", mem.why);
+        assert!(mem.why.contains("75%"), "{}", mem.why);
     }
 
     #[test]
@@ -1336,7 +1613,7 @@ mod tests {
             cpu: Some(0.343),
             ..Metrics::default()
         };
-        let found = Readings::findings(&now, &avg, &l, 'S', false);
+        let found = Readings::findings(&now, &avg, &l, 'S', Ceilings::default(), false);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].now, Reading::Unusual);
         assert_eq!(found[0].avg, Reading::Unusual);
@@ -1355,7 +1632,7 @@ mod tests {
             cpu: Some(0.02),
             ..Metrics::default()
         };
-        let found = Readings::findings(&now, &avg, &l, 'S', false);
+        let found = Readings::findings(&now, &avg, &l, 'S', Ceilings::default(), false);
         assert_eq!(found.len(), 1, "a spike is still a reason");
         assert_eq!(found[0].now, Reading::Alarm);
         assert_eq!(found[0].avg, Reading::Calm);
@@ -1368,34 +1645,18 @@ mod tests {
         // it pushed the sentence onto a second line on a live host.
         let l = a_machine();
         let m = Metrics {
-            mem: Some(2.4 * GIB),
+            mem: Some(6.2 * GIB),
             ..Metrics::default()
         };
-        let found = Readings::findings(&m, &m, &l, 'S', false);
+        let found = Readings::findings(&m, &m, &l, '?', Ceilings::default(), true);
         assert!(
-            found[0].why.starts_with("2.4G (30%) now and avg,"),
+            found[0].why.starts_with("6.2G (78%) now and avg;"),
             "{}",
             found[0].why
         );
         // Short enough to stand on one line of a hundred-cell terminal beside
         // a label column of sixteen (D-32).
         assert!(found[0].why.len() <= 80, "{}", found[0].why);
-    }
-
-    #[test]
-    fn the_swap_reason_says_it_is_the_subtree_and_not_the_process() {
-        // The card of a process carries `own swap`, which is the swap of that
-        // one process. The heuristic reads the swap of the whole subtree, so a
-        // sentence that did not say so named 1.9G beside a card row saying 0M
-        // (found on the reference host, 2026-08-30).
-        let l = a_machine();
-        let m = Metrics {
-            swap: Some(0.9 * GIB),
-            ..Metrics::default()
-        };
-        let found = Readings::findings(&m, &m, &l, 'S', false);
-        assert_eq!(found[0].name, "swap");
-        assert!(found[0].why.contains("subtree"), "{}", found[0].why);
     }
 
     #[test]
@@ -1406,7 +1667,7 @@ mod tests {
             mem: Some(1024.0),
             ..Metrics::default()
         };
-        assert!(Readings::findings(&quiet, &quiet, &l, 'S', false).is_empty());
+        assert!(Readings::findings(&quiet, &quiet, &l, 'S', Ceilings::default(), false).is_empty());
     }
 
     #[test]
@@ -1420,8 +1681,8 @@ mod tests {
                     cpu: Some(cpu),
                     ..Metrics::default()
                 };
-                let r = Readings::of(&m, &l, state, false);
-                let found = Readings::findings(&m, &m, &l, state, false);
+                let r = Readings::of(&m, &l, state, Ceilings::default(), false);
+                let found = Readings::findings(&m, &m, &l, state, Ceilings::default(), false);
                 let worst = found.iter().map(|f| f.now).max().unwrap_or(Reading::Calm);
                 assert_eq!(worst, r.flag, "state {state}, cpu {cpu}");
             }
@@ -1434,6 +1695,24 @@ mod tests {
         // field for it (D-42). This test stands as the record of that: it fails
         // to compile the day somebody adds one.
         let r = Readings::default();
-        let _ = (r.cpu, r.mem, r.swap, r.tasks, r.rx, r.tx, r.flag);
+        let _ = (r.cpu, r.mem, r.swap, r.rx, r.tx, r.flag);
+    }
+
+    /// Both steps of the machine's reading sit on `some`, the share of time at
+    /// least one task was stalled, and both are measured rather than chosen
+    /// (D-46). On the reference host on 2026-08-30 an idle machine read
+    /// `cpu some avg10` 0.47 and 24 busy threads on 6 cores read 41.42, so 10
+    /// stands clear of a quiet machine and 40 marks one that is genuinely
+    /// waiting.
+    #[test]
+    fn the_machine_is_read_by_the_share_of_time_something_waited() {
+        assert_eq!(pressure_reading(Some(0.47)), Reading::Calm);
+        assert_eq!(pressure_reading(Some(9.9)), Reading::Calm);
+        assert_eq!(pressure_reading(Some(10.0)), Reading::Unusual);
+        assert_eq!(pressure_reading(Some(39.9)), Reading::Unusual);
+        assert_eq!(pressure_reading(Some(41.42)), Reading::Alarm);
+        // A kernel without pressure reads nothing, and nothing is not calm by
+        // arithmetic - it is calm because there is no figure to read (D-13).
+        assert_eq!(pressure_reading(None), Reading::Calm);
     }
 }

@@ -76,7 +76,9 @@ instead of fighting the redraw.
 The same navigation on every level. The level is chosen by the position
 in the tree, not by a mode switch.
 
-- L0. Host: CPU, memory, swap, disk, network, load average. The rows are
+- L0. Host: CPU, memory, swap, disk, network, and the share of time
+  something waited for the processor, for memory and for the disk
+  (D-46). The rows are
   the processes that stand at the root of the forest - on an ordinary
   host, `init` and the kernel thread daemon.
 - L1 and below. The processes each of them started, with totals over the
@@ -512,6 +514,16 @@ column instead of reading five.
   one row would otherwise appear on every row above it up to the root.
   `!` and `*` stand where the reading survives on the row's own
   contribution, `↓` where it does not (D-44).
+- A row is read only by what means the same on every machine. What the
+  kernel records about the row's control group - held back by a quota,
+  killed for memory, a memory ceiling reached, a fork refused - is a
+  fact and needs no threshold; a share of the RAM, of the swap device or
+  of `pid_max` is a share of a figure somebody chose, and no longer
+  reads a row (D-45). The machine's own row keeps its shares.
+- The header reads the machine as three shares of time: how much of the
+  window at least one task stood waiting for the processor, for memory
+  and for the disk (D-46). It replaces the load average, which cannot be
+  read without knowing how many cores the machine has.
 - The card of a marked row says why. One line per heuristic that fired in
   either column, named after the card row its figure stands on, with a
   reason that names the figure of both columns, the whole it was read
@@ -524,6 +536,10 @@ many cells read alarm (invariant 18); the unit tests of `src/model.rs`
 fix every threshold and hold the reading and its reason to one source,
 `src/render.rs` holds the card block above the figures and absent on a
 calm row, and the live check names the firing rate measured on each rig.
+The four facts and the three shares of time cannot be waited for on a
+healthy host, so the live check raises each on purpose and demands the
+known answer: `induced_ceilings` for the facts, `induced_pressure` for
+the header.
 
 ## 6. Non-functional requirements
 
@@ -1916,6 +1932,150 @@ went into it and found nothing there.
   machine. The host row reads against its own steps (90 and 75 percent of
   `MemTotal`, D-42) and is calm.
 
+D-45. A row is read only by what does not depend on the machine. DECIDED
+2026-08-30 by the operator, who asked which readings survive a move
+between a machine with one core and a machine with hundreds.
+
+- What went wrong. Three of the four row readings were shares of a figure
+  somebody had chosen: memory against `MemTotal`, swap against the size
+  of the swap device, tasks against `pid_max`. The same process reads
+  calm on one host and marked on the next, so the reader cannot build a
+  habit, and a mark nobody trusts is worse than no mark.
+- Where the criterion came from. The `node_exporter` alert set of
+  `samber/awesome-prometheus-alerts` was read on 2026-08-30
+  (`dist/rules/host-and-hardware/node-exporter.yml`). Every rule there
+  that survives a move between machines is normalised against a property
+  of the hardware or against time, and never against a setting an
+  administrator picked. The set says nothing at all about a process: it
+  is host-level, and a process-level threshold has no upstream to copy.
+- The tasks rule was already dead and D-42 kept it with the reason
+  written down. Measured on the reference host on 2026-08-30: `pid_max`
+  is 4194304 against 558 running tasks, so the step stood at 419430 and
+  no host reaches it. The operator removed the rule rather than keep a
+  figure that cannot fire, and with it `Limits.pid_max` and the read of
+  `sys/kernel/pid_max`, which nothing else used.
+- What reads a row instead. Four facts the kernel already records about
+  the control group the row sits in: it was held back by its CPU quota
+  (`cpu.stat nr_throttled`, unusual), it reached its memory ceiling
+  (`memory.events.local max`, unusual), something in it was killed for
+  memory (`memory.events.local oom_kill`, alarm), a fork was refused
+  against the pid ceiling (`pids.events max`, alarm). A fact carries no
+  denominator and no threshold, so there is nothing about it to be wrong
+  on another machine.
+- All four are counters, so the fact is the growth between two ticks,
+  taken through `src/sample.rs` and keyed by the cgroup path. A counter
+  that stands still says the machine is healthy now, not that it was
+  always healthy - which is what the reader is asking.
+- A fact reaches every row the control group owns, and every row of a
+  control group below it. A process is held back by the quota of any
+  ancestor, not only of its own group, so the four are folded downward
+  from the root before they are attached to a row.
+- What the first measurement caught. `memory.events` counts the whole
+  subtree. Measured on the reference host on 2026-08-30 with a service
+  being killed for memory on purpose: `system.slice/memory.events` read
+  `oom_kill 51` while the same slice's `memory.events.local` read 0, and
+  the screen marked 40 rows for one killed child - every service that
+  happened to sit under the same slice. `pids.events` is not
+  hierarchical on that kernel: the child read `max 56` and the parent
+  `max 0`. The code reads `memory.events.local` for that reason, and the
+  test carries the two figures.
+- The facts cannot be waited for on a healthy host - the reference host
+  sets a memory limit on 3 control groups out of 90 and a CPU quota on
+  none - so each is raised on purpose in `scripts/host-check.sh`, the way
+  D-42 already had to for the alarm colour. A rule that counts zero out
+  of zero reads exactly like a pass.
+- Two things about systemd had to be measured before the induced states
+  said anything. A transient scope in a slice of its own gets no memory
+  controller on the reference host - `cgroup.subtree_control` on the new
+  slice is empty, so `MemoryMax` never applies and no `memory.*` file
+  exists - so the memory states run as transient services in
+  `system.slice`. And a service is torn down on its first kill, because
+  `OOMPolicy` defaults to `stop`, which removes the control group before
+  the next tick can read the counter; `OOMPolicy=continue` keeps it. Both
+  failures were silent and both looked like a passing check.
+- What it cost. Measured on the reference host on 2026-08-30 after the
+  change, twice: 3.84 percent of one core and 1.4 MB, and 3.08 percent
+  and 1.3 MB, against a budget of 5.
+  Two runs of the code before the change measured 3.55 and 4.12 percent
+  on the same rig on 2026-08-29, so the new figure lies inside the spread
+  between two runs of the old one and no growth can be attributed to the
+  three extra reads per control group. D-16 stands.
+- What was rejected. Calibrating the shares per host - it needs a figure
+  this project would have to invent, and the reader still cannot carry
+  the habit. Keeping the shares as a weaker warning - that is the same
+  wrong reading in a quieter colour, and it comes back on the next round.
+
+D-46. The header reads the machine as three shares of time. DECIDED
+2026-08-30 by the operator, who chose to replace the load average rather
+than add pressure beside it, and chose the steps from the measurement
+below.
+
+- Why the load average had to go. A load of 8 is a full machine on eight
+  cores and an idle one on two hundred, so the figure cannot be read
+  without knowing the machine. It is the same defect D-45 removed from
+  the rows, standing in the header.
+- What stands there instead. `WAIT cpu <n>% mem <n>% io <n>%` - the share
+  of the window in which at least one task was stalled waiting for that
+  resource, which the kernel exports as pressure stall information in
+  `/proc/pressure/{cpu,memory,io}`. A share of time is the same quantity
+  on one core and on two hundred. The window follows the mode the rest of
+  the screen is in: the kernel keeps a ten and a sixty second average,
+  and FR-13 already gives the screen two windows.
+- Both steps sit on `some` - unusual at 10 percent, alarm at 40 - and
+  they are measured, not chosen. On the reference host on 2026-08-30 an
+  idle machine read `cpu some avg10` 0.47, `io some` 0.16 and memory
+  0.00 in one run and 0.03, 0.00 and 0.00 in another; 24 busy threads on
+  6 cores read `cpu some avg10` 41.42 in one run and 36.71 in another.
+  Two orders of magnitude separate the two states, so 10 stands clear of
+  a quiet machine and 40 marks one that is genuinely waiting.
+- The alarm step lies inside the spread of the state that raises it -
+  36.71 and 41.42 for the same load - so `induced_pressure` demands that
+  the figures reach the screen and never that they reach a colour. A
+  floor nobody can hold is worse than no floor: it fails on a quiet day
+  and gets raised until it means nothing.
+- Why not `full`, which the kernel's own documentation calls thrashing
+  and which needs no threshold. Measured on the same host and day: an
+  idle machine reads `io full avg10` 0.16, so a step at any positive
+  value marks a healthy host; and at machine level the kernel leaves the
+  processor's `full` at zero whatever the machine is doing, so the one
+  resource an engineer opens the screen for would never be marked at all.
+  The rule written before that measurement did exactly both.
+- Pressure measures contention and not work. The state D-42 raises for
+  the alarm colour - three busy processes under a 250 percent quota -
+  reads `cpu some avg10` 0.36 on 6 cores, because three processes on six
+  cores never wait for one another. A state of its own raises it, with
+  four busy scopes per core.
+- On a kernel that does not export pressure all three figures read
+  unavailable and the state of the machine is simply not on the screen.
+  The load average does not come back in their place: it is a different
+  quantity, and putting it under the same label and the same colour would
+  say the screen is reading pressure when it is not. This is D-13 applied
+  to the header.
+- On a terminal too narrow for the whole header the segments give way one
+  at a time, and the three shares of time are the last to go: the network
+  rates are a column on every row of the table, while the machine's own
+  state stands nowhere else on the screen. DECIDED 2026-08-30 by the
+  operator after the first live run. Measured there: at 100 cells, which
+  is the width the live check draws at, the second summary line has 98
+  cells, the window label reserves 13, and the three segments want 35 for
+  the network, 26 for the swap and 32 for the shares of time - 93 against
+  85, so one of the three has to go. The segment that used to stand there
+  wanted 23 and fitted with one cell to spare, which is why nothing was
+  noticed until the header was drawn on a host. The unit tests all drew
+  at 110 cells, where all three fit; a test now draws at 100 as well.
+- The order the segments give way in is not the order they are drawn in.
+  They stand left to right as they always did - network, swap, shares of
+  time - and only the admission is by priority, so the reader's eye keeps
+  its places.
+- The load average is still read and still printed by `--dump-model
+  json`. It left the screen, not the model.
+- D-39 continues to hold over the new segment: the three figures stand in
+  fixed places and the labels do not move under them. Invariant 16 of
+  `scripts/frame-lint.py` used to look for a `LOAD` label; on a header
+  that no longer draws one it would have compared nothing against nothing
+  and passed. It now names `WAIT` and fails when the label is missing
+  altogether.
+
 ## 10. Definition of done
 
 The work is finished when:
@@ -2003,6 +2163,18 @@ worth carrying next to the requirements:
   bar beside the sorted column keeps reading the level instead, so the
   two may disagree, and they mean different things when they do
   (FR-21, D-42).
+- A row is read only by what means the same on every machine: what the
+  kernel records about its control group, and busy cores, which are cores
+  whatever the machine has. A share of the RAM, of the swap device or of
+  `pid_max` reads the machine's own row and no other (D-45).
+- The header reads the machine as three shares of time - waiting for the
+  processor, for memory and for the disk - and not as a queue length. A
+  kernel that does not export them leaves three unavailable figures and
+  nothing takes their place (D-46).
+- On a terminal too narrow for the whole header the segments give way one
+  at a time, and the three shares of time are the last to go. They stand
+  in the order they always stood in; only which of them is admitted
+  depends on the width (D-46).
 - Every figure of the header holds a fixed place, so that the labels
   beside it stand still while the numbers change. A figure too wide for
   its place takes the room it needs rather than losing a digit (D-39).

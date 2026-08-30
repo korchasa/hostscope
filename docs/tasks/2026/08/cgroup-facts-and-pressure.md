@@ -1,6 +1,6 @@
 ---
 date: "2026-08-30"
-status: to do
+status: done
 implements: [FR-21]
 tags: [screen, heuristics, cgroup, psi]
 related_tasks: [highlight-risky-values]
@@ -100,42 +100,42 @@ the three pressure figures (3A).
 
 ## Definition of Done
 
-- [ ] FR-21: A process whose cgroup was held back by its quota carries a mark,
+- [x] FR-21: A process whose cgroup was held back by its quota carries a mark,
       and its card names the fact and says the quota is the cgroup's.
   - Test: `src/collect/cgroup.rs::the_facts_of_a_cgroup_are_read_beside_its_processes`,
     `src/model.rs::a_throttled_cgroup_marks_every_row_it_owns`
   - Evidence: `cargo test --bin hostscope throttle`
-- [ ] FR-21: The three facts about a ceiling - memory killed, memory ceiling
+- [x] FR-21: The three facts about a ceiling - memory killed, memory ceiling
       reached, pid ceiling reached - each raise their own reading, and each
       fires only on the tick where the counter grew.
   - Test: `src/model.rs::a_counter_that_did_not_grow_raises_nothing`,
     `src/model.rs::each_ceiling_has_its_own_name_and_sentence`
   - Evidence: `cargo test --bin hostscope ceiling`
-- [ ] FR-21: A process row carries no reading of memory, swap or tasks. The
+- [x] FR-21: A process row carries no reading of memory, swap or tasks. The
       host row keeps all three.
   - Test: `src/model.rs::a_process_row_is_read_only_by_what_does_not_depend_on_the_machine`
   - Evidence: `cargo test --bin hostscope row_is_read_only_by`
-- [ ] FR-21: `sys/kernel/pid_max` is no longer opened by any run.
+- [x] FR-21: `sys/kernel/pid_max` is no longer opened by any run.
   - Test: `tests/model_over_snapshot.rs` over a snapshot without the file
   - Evidence: `make live SECTIONS="prepare security cleanup"` - the traced
     file set no longer names it
-- [ ] FR-1a: The header shows the three pressure figures in place of the load
+- [x] FR-1a: The header shows the three pressure figures in place of the load
       average, in the window the current mode names. On a kernel that does not
       export pressure all three read unavailable and the load average does not
       return in their place (D-13).
   - Test: `src/render.rs::the_header_reads_the_machine_as_three_shares_of_time`,
     `tests/frame_invariants.rs` over a snapshot with no `pressure` files
   - Evidence: `cargo test --test frame_invariants`
-- [ ] FR-21: The pressure thresholds are measured, not chosen. The figure each
+- [x] FR-21: The pressure thresholds are measured, not chosen. The figure each
       induced state produces is written into the requirements with the date and
       the rig.
   - Test: `scripts/frame-lint.py --alarm-min N` over the induced states
   - Evidence: `make live SECTIONS="induced_load induced_alarm measurements"`
-- [ ] Non-functional: the cost of a tick after the change is measured and
+- [x] Non-functional: the cost of a tick after the change is measured and
       stands inside D-16, or D-16 is reopened with the new figure.
   - Evidence: `make live SECTIONS=measurements`, compared against the figure in
     section 9 of `docs/testing.md`
-- [ ] The requirements carry D-45 (the row reads facts, not shares) and D-46
+- [x] The requirements carry D-45 (the row reads facts, not shares) and D-46
       (the header reads pressure), FR-21 and section 11 are amended, and
       section 13 of `docs/testing.md` names the check for each.
   - Evidence: `make fast` - `tests/documents.rs` holds the help text and the
@@ -209,3 +209,26 @@ fallback: it is a different quantity, and putting it in the same place under
 the same colour would say the screen is reading pressure when it is not. This
 is D-13 applied to the header - what cannot be read is marked unavailable and
 never replaced by something else.
+
+## What the work settled that the plan did not
+
+Two rules in the plan were written before the measurement and did not
+survive it.
+
+Step 6 said `full` above zero is the kernel's own definition of thrashing
+and needs no threshold. Measured on the reference host on 2026-08-30: an
+idle machine reads `io full avg10` 0.16, so that rule marks a healthy
+host, and at machine level the processor's `full` is zero whatever
+happens, so it never marks the one resource the screen is opened for. The
+operator chose both steps on `some` instead - 10 and 40 - from the
+measured spread between an idle machine and one with four busy scopes per
+core. D-46 carries the figures.
+
+Nothing in the plan drew the header at the width the live check uses. The
+segment for the three shares of time wants 32 cells where the load
+average wanted 23, and at 100 cells the second summary line has 85 for
+segments wanting 93 - so on the first live run the machine's state was
+not on the screen at all, and five sections failed on it. The operator
+chose to keep the shares of time longest and let the network rates give
+way, because they are a column on every row while the shares stand
+nowhere else. A unit test now draws the header at 100 as well as at 110.

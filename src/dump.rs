@@ -46,7 +46,6 @@ pub fn model_json(snap: &Snapshot, tick_ms: u64) -> String {
     out.push_str(&format!("    \"cores\": {},\n", num(l.cores)));
     out.push_str(&format!("    \"mem_total\": {},\n", num(l.mem_total)));
     out.push_str(&format!("    \"swap_total\": {},\n", num(l.swap_total)));
-    out.push_str(&format!("    \"pid_max\": {},\n", opt(l.pid_max)));
     out.push_str(&format!("    \"link_speed\": {}\n", opt(l.link_speed)));
     out.push_str("  },\n");
     out.push_str("  \"tree\": ");
@@ -107,6 +106,15 @@ fn node_json(node: &Node, depth: usize, limits: &Limits, out: &mut String) {
     out.push_str(&format!("{pad}\"reading\": "));
     readings_json(&node.readings(limits, Mode::Instant), out);
     out.push_str(",\n");
+    // The ceilings the row's control group was held against during the tick.
+    // They are facts and not figures, so they are printed as they are rather
+    // than folded into the reading beside them (D-45), which is what lets the
+    // oracle see a fact that fired on the wrong row.
+    let h = node.detail.ceilings;
+    out.push_str(&format!(
+        "{pad}\"held\": {{\"throttled\": {}, \"oom_kill\": {}, \"mem_ceiling\": {}, \"pid_ceiling\": {}}},\n",
+        h.throttled, h.oom_kill, h.mem_ceiling, h.pid_ceiling
+    ));
     if node.children.is_empty() {
         out.push_str(&format!("{pad}\"children\": []\n"));
     } else {
@@ -126,11 +134,10 @@ fn node_json(node: &Node, depth: usize, limits: &Limits, out: &mut String) {
 
 fn readings_json(r: &Readings, out: &mut String) {
     out.push_str(&format!(
-        "{{\"cpu\": {}, \"mem\": {}, \"swap\": {}, \"tasks\": {}, \"rx\": {}, \"tx\": {}, \"flag\": {}}}",
+        "{{\"cpu\": {}, \"mem\": {}, \"swap\": {}, \"rx\": {}, \"tx\": {}, \"flag\": {}}}",
         string(r.cpu.label()),
         string(r.mem.label()),
         string(r.swap.label()),
-        string(r.tasks.label()),
         string(r.rx.label()),
         string(r.tx.label()),
         string(r.flag.label())
@@ -223,7 +230,6 @@ mod tests {
             cores: 4.0,
             mem_total: 8.0 * 1024.0 * 1024.0 * 1024.0,
             swap_total: 0.0,
-            pid_max: Some(32768.0),
             link_speed: None,
         };
         let mut n = Node::new("p:1", "a", Kind::Process);
@@ -240,8 +246,10 @@ mod tests {
             !text.contains("\"rd\": \"calm\""),
             "disk has no reading: {text}"
         );
-        assert!(text.contains("\"pid_max\": 32768"), "{text}");
         assert!(text.contains("\"link_speed\": null"), "{text}");
+        // The ceilings a row's control group was held against stand beside the
+        // reading, as facts and not as figures (D-45).
+        assert!(text.contains("\"held\": {\"throttled\": false"), "{text}");
         assert!(crate::enrich::json::parse(&text).is_some(), "{text}");
     }
 

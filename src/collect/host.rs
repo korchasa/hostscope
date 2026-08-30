@@ -3,6 +3,8 @@
 use std::fs;
 use std::path::Path;
 
+use crate::model::{Pressure, Stall};
+
 /// Raw host counters of one tick. Cumulative ones go through the sampler like
 /// every other counter (FR-15).
 #[derive(Clone, Debug, Default)]
@@ -65,14 +67,42 @@ pub fn read(proc_root: &Path) -> RawHost {
     h
 }
 
-/// The task ceiling of the kernel, so a subtree's task count can be read as a
-/// share of what this machine allows (D-42). Absent where the file cannot be
-/// read - and then the heuristic does not fire, rather than dividing by a
-/// number this project invented.
-pub fn pid_max(proc_root: &Path) -> Option<f64> {
-    read_trim(&proc_root.join("sys/kernel/pid_max"))
-        .and_then(|t| t.parse::<f64>().ok())
-        .filter(|v| *v > 0.0)
+/// Reads `<root>/pressure/{cpu,memory,io}`. A kernel built without the feature,
+/// or booted with it off, has no such directory - and then there is no reading
+/// at all rather than a machine that never waited for anything (D-13).
+pub fn pressure(proc_root: &Path) -> Pressure {
+    let one = |name: &str| {
+        fs::read_to_string(proc_root.join("pressure").join(name))
+            .map(|t| stall(&t))
+            .unwrap_or_default()
+    };
+    Pressure {
+        cpu: one("cpu"),
+        mem: one("memory"),
+        io: one("io"),
+    }
+}
+
+/// `some avg10=0.00 avg60=0.00 avg300=0.00 total=0`, two lines of it.
+fn stall(text: &str) -> Stall {
+    let mut s = Stall::default();
+    for line in text.lines() {
+        let mut it = line.split_whitespace();
+        let which = it.next();
+        let (a, b) = match which {
+            Some("some") => (&mut s.some10, &mut s.some60),
+            Some("full") => (&mut s.full10, &mut s.full60),
+            _ => continue,
+        };
+        for f in it {
+            if let Some(v) = f.strip_prefix("avg10=") {
+                *a = v.parse().ok();
+            } else if let Some(v) = f.strip_prefix("avg60=") {
+                *b = v.parse().ok();
+            }
+        }
+    }
+    s
 }
 
 /// The summed speed of the PHYSICAL links, in bytes per second, so the network
@@ -187,6 +217,46 @@ pub fn netns_ino(proc_root: &Path, pid: i32) -> Option<u64> {
 mod tests {
     use super::*;
 
+    /// The one quantity that means the same on a machine with one core and on
+    /// one with two hundred: the share of time something waited (D-46). The
+    /// kernel writes two lines - `some`, where at least one task was stalled,
+    /// and `full`, where every non-idle task was stalled at once, which its own
+    /// documentation calls thrashing.
+    #[test]
+    fn pressure_is_read_as_a_share_of_time_and_not_of_the_machine() {
+        let text = "some avg10=1.23 avg60=4.56 avg300=0.07 total=14765441644\n\
+                    full avg10=0.00 avg60=2.50 avg300=0.00 total=0\n";
+        let s = stall(text);
+        assert_eq!(s.some10, Some(1.23));
+        assert_eq!(s.some60, Some(4.56));
+        assert_eq!(s.full10, Some(0.0));
+        assert_eq!(s.full60, Some(2.50));
+        // A kernel built without pressure leaves no file at all, and an empty
+        // one is not a machine that never waited (D-13).
+        assert_eq!(stall(""), Stall::default());
+    }
+
+    #[test]
+    fn the_three_resources_are_read_and_a_missing_one_stays_unavailable() {
+        let dir = std::env::temp_dir().join(format!("hs-psi-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("pressure")).unwrap();
+        fs::write(
+            dir.join("pressure/cpu"),
+            "some avg10=9.00 avg60=1.00 avg300=0.00 total=1\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("pressure/io"),
+            "some avg10=3.00 avg60=1.00 avg300=0.00 total=1\nfull avg10=2.00 avg60=0.00 avg300=0.00 total=1\n",
+        )
+        .unwrap();
+        let p = pressure(&dir);
+        assert_eq!(p.cpu.some10, Some(9.0));
+        assert_eq!(p.io.full10, Some(2.0));
+        assert_eq!(p.mem.some10, None, "the file was not there");
+    }
+
     #[test]
     fn counts_cores_and_idle() {
         let text = "cpu  100 0 100 700 100 0 0 0 0 0\ncpu0 1 0 1 1\ncpu1 1 0 1 1\nintr 0\n";
@@ -250,14 +320,5 @@ mod tests {
             link_speed(std::path::Path::new("/nonexistent/class/net")),
             None
         );
-    }
-
-    #[test]
-    fn the_task_ceiling_comes_from_the_kernel_and_is_absent_when_it_cannot_be_read() {
-        let dir = std::env::temp_dir().join(format!("hs-pidmax-{}", std::process::id()));
-        fs::create_dir_all(dir.join("sys/kernel")).unwrap();
-        fs::write(dir.join("sys/kernel/pid_max"), "32768\n").unwrap();
-        assert_eq!(pid_max(&dir), Some(32768.0));
-        assert_eq!(pid_max(std::path::Path::new("/nonexistent")), None);
     }
 }

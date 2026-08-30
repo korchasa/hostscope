@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::enrich::Enrichment;
-use crate::model::{Detail, HostSummary, Kind, Limits, Metrics, Node, Owner, OwnerKind, Snapshot};
+use crate::model::{
+    Ceilings, Detail, HostSummary, Kind, Limits, Metrics, Node, Owner, OwnerKind, Snapshot,
+};
 use crate::sample::Sampler;
 use crate::util::clean;
 
@@ -30,9 +32,6 @@ pub struct Collector {
     boot_time: f64,
     cost: TickCost,
     cmd_cache: procs::CmdCache,
-    /// The two denominators that do not change while the tool runs, so they
-    /// are read once rather than every tick (D-42).
-    pid_max: Option<f64>,
     link_speed: Option<f64>,
 }
 
@@ -48,7 +47,6 @@ pub struct TickCost {
 impl Collector {
     pub fn new(cgroup_root: PathBuf, proc_root: PathBuf, now: f64, etc_passwd: bool) -> Collector {
         let self_netns = host::netns_ino(&proc_root, std::process::id() as i32);
-        let pid_max = host::pid_max(&proc_root);
         // `/sys/class/net` sits beside `/sys/fs/cgroup` rather than under
         // `/proc`, and a captured snapshot lays the two out the same way, so
         // the interface set is found from the cgroup root instead of being
@@ -80,7 +78,6 @@ impl Collector {
             boot_time: 0.0,
             cost: TickCost::default(),
             cmd_cache: procs::CmdCache::new(),
-            pid_max,
             link_speed,
         }
     }
@@ -104,9 +101,10 @@ impl Collector {
         let raw = cgroup::read_tree(&self.cgroup_root);
         let mut cgroups = Vec::new();
         cgroup::flatten(&raw, &mut cgroups);
+        let held = self.ceilings(&raw);
         self.cost.cgroup_ms = started.elapsed().as_secs_f64() * 1000.0;
 
-        let root = self.build_forest(&cgroups, enrichment, &summary);
+        let root = self.build_forest(&cgroups, enrichment, &summary, &held);
 
         self.history.push(summary.busy_cores);
         if self.history.len() > 120 {
@@ -122,7 +120,6 @@ impl Collector {
                 cores: summary.cores,
                 mem_total: summary.mem_total,
                 swap_total: summary.swap_total,
-                pid_max: self.pid_max,
                 link_speed: self.link_speed,
             },
             host: summary,
@@ -149,6 +146,10 @@ impl Collector {
             .sampler
             .gauge("host:swap_used", (raw.swap_total - raw.swap_free).max(0.0));
         HostSummary {
+            // Read fresh each tick and not sampled: the kernel already averages
+            // it over ten and sixty seconds, and averaging an average again
+            // would say nothing about either window (D-46).
+            pressure: host::pressure(&self.proc_root),
             hostname: clean(&raw.hostname),
             kernel: clean(&raw.kernel),
             uptime_secs: raw.uptime,
@@ -181,6 +182,7 @@ impl Collector {
         cgroups: &[(String, Vec<i32>)],
         enrichment: &Enrichment,
         summary: &HostSummary,
+        held: &HashMap<String, Ceilings>,
     ) -> Node {
         let started = std::time::Instant::now();
         let mut owners: HashMap<i32, (String, Owner)> = HashMap::new();
@@ -244,7 +246,7 @@ impl Collector {
         node.detail.cgroup_path = Some("/".to_string());
         node.children = roots
             .iter()
-            .map(|pid| self.process_node(*pid, &samples, &kids, &owners, &kernel))
+            .map(|pid| self.process_node(*pid, &samples, &kids, &owners, &kernel, held))
             .collect();
         node.detail.child_count = node.children.len();
 
@@ -273,6 +275,56 @@ impl Collector {
         node
     }
 
+    /// The ceilings every cgroup was held against during this tick, keyed by
+    /// path (D-45).
+    ///
+    /// Each of the four is a running total, so the fact is the growth between
+    /// two ticks and never the value: a group throttled an hour ago is not a
+    /// group being throttled now. The first tick of a run therefore reports
+    /// nothing, which is the same rule FR-15 already holds every rate to.
+    ///
+    /// A group inherits what its ancestors were held against, because the
+    /// limit is usually not set where the process is listed: a runtime puts the
+    /// memory limit on the pod and runs the process one directory below it, and
+    /// `cpu.stat` counts the throttling of the group whose quota it was.
+    fn ceilings(&mut self, raw: &cgroup::RawCgroup) -> HashMap<String, Ceilings> {
+        let mut flat = Vec::new();
+        cgroup::flatten_ceilings(raw, &mut flat);
+        let mut grew: Vec<(String, Ceilings)> = Vec::with_capacity(flat.len());
+        for (rel, c) in &flat {
+            let mut hit = |what: &str, v: Option<f64>| match v {
+                Some(v) => self.sampler.counter(&format!("cg:{rel}:{what}"), v).instant > 0.0,
+                None => false,
+            };
+            grew.push((
+                rel.clone(),
+                Ceilings {
+                    throttled: hit("thr", c.throttled),
+                    oom_kill: hit("oom", c.oom_kill),
+                    mem_ceiling: hit("mem", c.mem_ceiling),
+                    pid_ceiling: hit("pid", c.pid_ceiling),
+                },
+            ));
+        }
+        // The walk is depth-first from the root, so every ancestor of a path
+        // has already been folded by the time the path itself is reached.
+        let mut out: HashMap<String, Ceilings> = HashMap::new();
+        for (rel, own) in grew {
+            let mut all = own;
+            if let Some(cut) = rel.rfind('/') {
+                let parent = if cut == 0 { "/" } else { &rel[..cut] };
+                if let Some(up) = out.get(parent) {
+                    all.throttled |= up.throttled;
+                    all.oom_kill |= up.oom_kill;
+                    all.mem_ceiling |= up.mem_ceiling;
+                    all.pid_ceiling |= up.pid_ceiling;
+                }
+            }
+            out.insert(rel, all);
+        }
+        out
+    }
+
     /// The owner of every process in a cgroup, named once per cgroup rather
     /// than once per process (FR-20).
     fn owner_of(&self, rel: &str, enrichment: &Enrichment) -> Owner {
@@ -299,6 +351,7 @@ impl Collector {
         kids: &HashMap<i32, Vec<i32>>,
         owners: &HashMap<i32, (String, Owner)>,
         kernel: &std::collections::HashSet<i32>,
+        held: &HashMap<String, Ceilings>,
     ) -> Node {
         let s = &samples[&pid];
         let id = format!("p:{}:{}", pid, s.starttime);
@@ -382,6 +435,10 @@ impl Collector {
                 self.boot_time + s.starttime as f64 / procs::USER_HZ,
             )),
             vsz: Some(s.vsz),
+            ceilings: cgroup_path
+                .as_deref()
+                .and_then(|rel| held.get(rel).copied())
+                .unwrap_or_default(),
             cgroup_path,
             short_id: container,
             owner: Some(owner),
@@ -404,7 +461,7 @@ impl Collector {
             .get(&pid)
             .map(|list| {
                 list.iter()
-                    .map(|c| self.process_node(*c, samples, kids, owners, kernel))
+                    .map(|c| self.process_node(*c, samples, kids, owners, kernel, held))
                     .collect()
             })
             .unwrap_or_default();
@@ -599,5 +656,67 @@ fn glue_single_child(node: &mut Node) {
         } else {
             node.detail.glued.append(&mut child.detail.glued);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn group(rel: &str, throttled: Option<f64>) -> cgroup::RawCgroup {
+        cgroup::RawCgroup {
+            rel: rel.to_string(),
+            ceilings: cgroup::CeilingCounters {
+                throttled,
+                ..cgroup::CeilingCounters::default()
+            },
+            ..cgroup::RawCgroup::default()
+        }
+    }
+
+    /// The ceiling a row is held against is the growth of a counter between two
+    /// ticks, and it is inherited downwards (D-45).
+    ///
+    /// Both halves matter and neither is obvious. The first tick of a run knows
+    /// no previous value, so it must report nothing rather than everything the
+    /// group was ever held against - the same rule FR-15 holds every rate to.
+    /// And the quota is set where the runtime put it, which is the pod and not
+    /// the container below it, so a container whose own `cpu.stat` reads zero
+    /// is still a container that was held back.
+    #[test]
+    fn a_ceiling_is_the_growth_between_ticks_and_reaches_the_groups_below_it() {
+        let dir = std::env::temp_dir().join(format!("hs-ceil-{}", std::process::id()));
+        let mut c = Collector::new(dir.join("cgroup"), dir.join("proc"), 0.0, false);
+
+        let mut tree = group("/", None);
+        let mut pod = group("/pod", Some(5.0));
+        pod.children.push(group("/pod/container", Some(0.0)));
+        tree.children.push(pod);
+
+        let first = c.ceilings(&tree);
+        assert!(
+            !first["/pod"].throttled,
+            "the first tick has nothing to compare against"
+        );
+
+        c.sampler.begin(1.0);
+        let same = c.ceilings(&tree);
+        assert!(!same["/pod"].throttled, "a counter that stood still");
+
+        c.sampler.begin(2.0);
+        let mut tree = group("/", None);
+        let mut pod = group("/pod", Some(7.0));
+        pod.children.push(group("/pod/container", Some(0.0)));
+        tree.children.push(pod);
+        let grew = c.ceilings(&tree);
+        assert!(grew["/pod"].throttled, "the quota was hit twice more");
+        assert!(
+            grew["/pod/container"].throttled,
+            "the quota is the pod's, and the process runs one level below it"
+        );
+        assert!(
+            !grew["/"].throttled,
+            "the root was not held against anything"
+        );
     }
 }

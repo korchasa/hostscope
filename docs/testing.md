@@ -424,11 +424,14 @@ Every invariant is checked on any frame and refers to a requirement.
 15. The swap column, where a frame has one, stands between `MEM` and
     `DISK`. It is the one optional column - a host that has swapped
     nothing draws no `SWAP` at all (D-35).
-16. The header holds its places: the `MEM`, `SWAP` and `LOAD` labels of
+16. The header holds its places: the `MEM`, `SWAP` and `WAIT` labels of
     the two summary lines sit at the same cell in every frame of one run.
     This is the one invariant read across frames rather than inside one,
     because a header that moves can only be seen by comparing two of
-    them (D-39).
+    them (D-39). `MEM` and `WAIT` must be there at all: a label the
+    header stopped drawing would otherwise be compared against nothing
+    and pass. `SWAP` is the one that may be absent, because a host that
+    has swapped nothing draws no swap column (D-35).
 17. The style map covers the frame cell for cell: as many lines, and each
     line as many characters as its frame line takes cells. A map that
     does not line up says nothing about the colours it claims to describe
@@ -547,8 +550,26 @@ files. Settled by D-40: the budget carries two numbers now, 4 percent
 where nothing is in swap and 5 where the column is drawn, and the check
 reads `/proc/meminfo` to know which of them it is holding the host to.
 
-**The last full run, on the Kubernetes rig, 2026-08-30.** 43 checks
-passed, none failed, one skipped. It is the first run that can see the
+**The last full run, on the Kubernetes rig, 2026-08-30.** 48 checks
+passed, one failed, one skipped. The failure was the oracle, and it was
+not one: a `containerd-shim` read 226709504 bytes to the oracle and
+239030272 to the model, 5 percent apart, and the section re-run alone a
+minute later compared 212 processes with no disagreement at all. That is
+a process whose memory moved between two reads taken over the same ten
+seconds. The figures of that run: 22.3 ms to the first frame, collection
+53.1 ms at the 95th percentile over 20 ticks, render 0.8 ms over 21
+frames, 1313 bytes a frame with 5 full screen clears in 20 seconds, and
+the application itself 3.08 percent of one core and 1.3 MB against the
+budget of 5 that a host with the swap column drawn is held to (D-40).
+
+The two readings that cannot be waited for were raised on purpose. All
+four of the cgroup facts reached a row (D-45). The machine read itself
+as `cpu some avg10` 0.03, memory 0.00 and io 0.00 while idle, and 36.71,
+0.00 and 0.00 under four busy scopes per core - the state that says the
+three shares of time reach the screen at all (D-46).
+
+An earlier run the same day, before the pressure and the facts were
+written: 43 checks passed, none failed, one skipped. It is the first run that can see the
 colour of the screen: 42 of the 45 captured frames carry a style map, the
 linter checks that every map covers its frame cell for cell, and it
 counts how loud each screen was (FR-21, invariants 17 and 18). Over an
@@ -683,7 +704,7 @@ linter catches layout, not meaning.
 | FR-17 | Two runs over one snapshot give an identical dump; the file-syscall trace |
 | FR-18 | V4: the list scenario `v / r e d i s Enter` over the snapshot, invariants 1-13; the interface walk of the live check presses `v` |
 | FR-19 | Withdrawn by D-24 |
-| FR-21 | Unit tests over `src/model.rs` fix every threshold and hold the host row to the thresholds of a machine rather than of a process; unit tests over `src/render.rs` hold the figure, the summary line, the card and the row glyph to the same reading, and hold the bar out of it; V4: invariant 17 over every frame the live check captures with `--dump-style`, and invariant 18 reporting how loud each screen was; V2: `--dump-model json` carries the reading of every row and the denominators it was read against |
+| FR-21 | Unit tests over `src/model.rs` fix every threshold and hold the host row to the thresholds of a machine rather than of a process; unit tests over `src/render.rs` hold the figure, the summary line, the card and the row glyph to the same reading, and hold the bar out of it; V4: invariant 17 over every frame the live check captures with `--dump-style`, and invariant 18 reporting how loud each screen was; V2: `--dump-model json` carries the reading of every row and the denominators it was read against, and the facts of its control group beside it; V3: the `induced_ceilings` and `induced_pressure` sections raise the readings that cannot be waited for and demand the known answer |
 | FR-20 | V1 over the three environment shapes: every container named on every process it runs, the filter finding those processes by the container name and by the kind of owner; every owner the model names is on a drawn row |
 | D-25 | V1: a chain of single children is one row named for the whole chain, and its card names every link with its pid - over a chain of seven under a six-digit pid, at two widths, because a short chain and a three-digit pid are the two sizes at which a lost link stays invisible; V4: a card that cannot hold it says how many lines it hid, checked at the height that holds the card exactly and one line below it, because a guard on a comparison is wrong by one line at a time; V4: a pid too wide for its room is marked as cut, at four widths from 24 cells up, because a silent cut names another process; V3: the walk uses `Enter`, `BSpace` and `i` |
 | D-26 | Invariant 8: the `OWNER` column is demanded on every frame, no longer only where it happens to be drawn |
@@ -697,12 +718,14 @@ linter catches layout, not meaning.
 | D-36 | V1 over a snapshot holding a root process whose `status` carries no `VmSwap` line: its row shows a zero rather than `n/a`, and the `(self)` row of the level is a number rather than an unknown. A process whose `status` cannot be read at all still shows `n/a` on the card |
 | D-37 | Unit tests over the palette: every theme is reachable by the name it ships under, no theme puts a band colour or its own text colour on the ground of its selected row, and the first theme is still the sixteen terminal names. A unit test over the renderer walks all eight and checks that each reaches both the frame line and the ground of the selected row. `--theme` takes a name and refuses one it does not know; `HOSTSCOPE_THEME` takes a name and ignores one it does not know |
 | D-38 | A unit test over the timer: the first call is not due, a call before the span is not due, and a call after it is due once. On the host, `tmux pipe-pane` over 20 seconds counts the bytes and the full clears at the three second and the one second interval, and section 6a carries what it counted |
-| D-39 | A unit test over the renderer draws the header twice, with the same host at two magnitudes of every figure, and demands that `MEM`, `SWAP` and `LOAD` land on the same cell both times. Invariant 16 of `scripts/frame-lint.py` holds the same across the frames of every captured run |
+| D-39 | A unit test over the renderer draws the header twice, with the same host at two magnitudes of every figure, and demands that `MEM`, `SWAP` and `WAIT` land on the same cell both times, and fails outright where one of the three is missing. Invariant 16 of `scripts/frame-lint.py` holds the same across the frames of every captured run |
 | D-40 | The `measurements` section reads `/proc/meminfo` and holds the host to 4 percent of one core where nothing is in swap and to 5 where the swap column is drawn, printing which of the two it applied. Confirmed on both rigs on 2026-08-29: 2.40 percent against the four on the rig that had swapped nothing, 3.66 against the five on the one that had |
 | D-41 | A unit test over the command line holds the default on and the flag off. The `security` section traces the file syscalls twice: `/etc/passwd` is opened by the default run and by no run that passes `--no-etc-passwd`, and the section fails when the default run did not open it either, because then the comparison proves nothing |
 | D-42 | The heuristics stand as unit tests, one per denominator, so a threshold that moves shows up as a named failure rather than as a screen that looks different. The map of `--dump-style` is checked twice: `tests/frame_invariants.rs` demands that a frame over a snapshot carries a map of the right shape at all, and invariant 17 of `scripts/frame-lint.py` reads its second opinion over every frame of a live run. The `/sys/class/net` read is inside the surface FR-10a names, and the `security` section holds the trace to it |
 | D-43 | Unit tests over `src/model.rs`: the heuristics that fired come back named after the card row their figure stands on, with a reason carrying the figure of BOTH columns, the whole and the threshold; a figure that fires in one column only says which; a figure that did not move is written once; the swap reason says it is the subtree, not the process; a calm row returns none; and the worst of the reasons is the flag the row carries, which is what holds the reading and its sentence to one source. Unit tests over `src/render.rs`: the card of a marked row prints the block above its figures, and the card of a calm row prints no block at all |
 | D-44 | Unit tests over `src/model.rs`: a parent whose figures are entirely its children's is marked as the way down while the child that carries them is marked as the source; a parent that keeps a reading of its own after its children are subtracted stays the source; a state the kernel reports is always the row's own; and a calm row carries no mark. A unit test over `src/render.rs` reads the glyph off the drawn frame: the arrow on the parent of the top level, and the solid mark on the child one level down. The mark is computed where the row is built, in `src/app.rs`, because the row keeps a shallow copy of the node without the children the remainder is derived from |
+| D-45 | Unit tests over `src/collect/cgroup.rs`: the four counters are read beside `cgroup.procs`, a file that is not there leaves the counter unavailable rather than zero, and `memory.events.local` is read and not `memory.events` - the test carries the two figures the reference host gave when the difference was measured. A unit test over `src/collect/mod.rs`: a fact raised on an ancestor reaches a row of a control group below it, and a counter that did not grow between two ticks raises nothing. Unit tests over `src/model.rs`: each fact has its own name, sentence and severity, the sentence says the fact belongs to the control group, and a process row carries no reading of memory, of swap or of tasks. On the host, the `induced_ceilings` section raises all four on purpose and demands each reach a row; the `security` section holds the trace and no longer names `sys/kernel/pid_max` |
+| D-46 | Unit tests over `src/model.rs` fix both steps on `some` and hold `full` out of the reading. A unit test over `src/render.rs` reads the colour off the drawn header: an idle machine carrying `io full` 0.16 is unmarked, and 41 percent of time waiting for the processor is an alarm. A second reads the window off the mode, and a third draws a snapshot with no `pressure` files and demands three unavailable figures with no load average in their place. On the host, the `induced_pressure` section raises real contention - four busy scopes per core - prints the three figures and demands the header carry them; invariant 16 of `scripts/frame-lint.py` holds the `WAIT` label in place and fails where it is gone. A unit test draws the header at 100 cells, which is the width the live check draws at, and demands that the three shares of time are there and that the network rates are the segment that gave way; the same test at 110 demands all three |
 | Section 6 | Section 9 of this document |
 
 ## 14. Link to the requirements
