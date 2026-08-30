@@ -10,7 +10,7 @@ a different interface of the kernel, read by other people's code. Two readings
 around the window the application measures give the rate to compare against the
 host row.
 
-usage: netlink-check.py /path/to/hostscope [--window 10]
+usage: netlink-check.py /path/to/hostscope [--window 30]
 """
 
 import json
@@ -18,12 +18,21 @@ import subprocess
 import sys
 import time
 
-# Both windows are ten seconds and start within a moment of each other, so a
+# Both windows are the same length and start within a moment of each other, so a
 # burst lands in both and the difference left is the offset between their
 # starts. Measured on the Kubernetes rig on 2026-08-29: 1755 against 1754 bytes
 # a second in, 7837 against 7832 out - six hundredths of a percent. Ten percent
 # is loose against that and still tight enough for any convention error this is
 # here to catch.
+#
+# The window is thirty seconds and not ten, which is what it was until
+# 2026-08-31. On the Docker rig, which carries a steady 40 to 70 KB/s of its
+# own, a ten second window failed once with the model 15 percent above netlink,
+# and four repeats within the minute came back 0.2 to 0.3 percent apart. The
+# offset between the two starts is a fixed fraction of a second, so a burst
+# inside it costs three times less of a rate averaged over thirty seconds than
+# of one averaged over ten. What the check is here to catch - a counter summed
+# the wrong way - does not shrink with the window at all.
 #
 # The floor is small on purpose. A floor of 16 KB/s was tried first and made the
 # check inert: this host talks at a few kilobytes a second, so a probe that
@@ -57,7 +66,7 @@ def main():
         print(__doc__)
         return 2
     binary = sys.argv[1]
-    window = 10.0
+    window = 30.0
     if "--window" in sys.argv:
         window = float(sys.argv[sys.argv.index("--window") + 1])
 

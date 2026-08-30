@@ -280,7 +280,7 @@ network() {
     skip "iproute2 is not installed on this host, so netlink cannot be compared"
     return
   fi
-  if sudo -n python3 "$DIR/netlink-check.py" "$BIN" --window 10; then
+  if sudo -n python3 "$DIR/netlink-check.py" "$BIN" --window 30; then
     pass "the host network rates agree with the ones netlink reports"
   else
     fail "the host network rates disagree with netlink"
