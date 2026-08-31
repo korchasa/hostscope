@@ -537,9 +537,28 @@ sudo systemd-run --scope --slice=hs -p CPUQuota=50% --unit=hs-steady -q \
   screen clear does not arrive on every frame: for `htop` it did not
   arrive once in two seconds.
 
-**The last full run, on both rigs, 2026-08-31.** The Kubernetes rig
-passed 49 checks with none failed and one skipped - the container with a
-120 character name, which needs a Docker to raise it. 211 processes on
+**The last full run, on both rigs, on the code that carries the card
+fix.** The Docker rig passed 50 checks with none failed and nothing
+skipped on 2026-08-31, in 181 seconds, the netlink comparison among them
+with the thirty second window explained below. The card of a container
+names its image, its state and its restart count there, which is what no
+run before it could show.
+
+The Kubernetes rig passed 49 with none failed and one skipped on
+2026-09-01, in 171 seconds; the skip is the container with a 120
+character name, which needs a Docker to raise it. 210 processes on six
+cores: 22.0 ms to the first frame, collection 52.6 ms at the 95th
+percentile over 19 ticks, render 0.8 ms over 20 frames, 1378 bytes a
+frame with five full screen clears in 20 seconds, and the application
+itself 3.38 percent of one core and 1.3 MB against the 5 percent a host
+with the swap column drawn is held to (D-40). The linter read 45 frames
+of the ordinary walk with no alarm cell on any of them, and the two
+frames of the induced state with 11. The oracle compared 210 processes
+over ten seconds and found no disagreement.
+
+**The run before that, on both rigs, 2026-08-31.** The Kubernetes rig
+passed 49 checks with none failed and one skipped - the same container
+with a 120 character name. 211 processes on
 six cores: 22.5 ms to the first frame, collection 52.1 ms at the 95th
 percentile over 19 ticks, render 0.8 ms over 20 frames, five full screen
 clears in 20 seconds, and the application itself 3.21 percent of one core
