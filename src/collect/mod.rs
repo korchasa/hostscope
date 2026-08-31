@@ -246,7 +246,7 @@ impl Collector {
         node.detail.cgroup_path = Some("/".to_string());
         node.children = roots
             .iter()
-            .map(|pid| self.process_node(*pid, &samples, &kids, &owners, &kernel, held))
+            .map(|pid| self.process_node(*pid, &samples, &kids, &owners, &kernel, held, enrichment))
             .collect();
         node.detail.child_count = node.children.len();
 
@@ -344,6 +344,7 @@ impl Collector {
         owner
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn process_node(
         &mut self,
         pid: i32,
@@ -352,6 +353,7 @@ impl Collector {
         owners: &HashMap<i32, (String, Owner)>,
         kernel: &std::collections::HashSet<i32>,
         held: &HashMap<String, Ceilings>,
+        enrichment: &Enrichment,
     ) -> Node {
         let s = &samples[&pid];
         let id = format!("p:{}:{}", pid, s.starttime);
@@ -411,12 +413,20 @@ impl Collector {
                 },
             ),
         };
-        let container = match (&owner.kind, &cgroup_path) {
+        // The owner is named from the daemon's answer (`owner_of`), and the
+        // rest of what FR-3 asks for - the image, the state, the creation time,
+        // the restart count - belongs to the row, because that is where the
+        // card reads it. Without this the card had a name from the daemon on
+        // one line and "the socket is not readable" on the next.
+        let (short_id, container) = match (&owner.kind, &cgroup_path) {
             (OwnerKind::Container, Some(rel)) => match cgroup::ownership(rel) {
-                cgroup::Ownership::Container(id) => Some(cgroup::short_id(&id)),
-                _ => None,
+                cgroup::Ownership::Container(id) => (
+                    Some(cgroup::short_id(&id)),
+                    enrichment.containers.get(&id).cloned(),
+                ),
+                _ => (None, None),
             },
-            _ => None,
+            _ => (None, None),
         };
 
         node.detail = Detail {
@@ -440,7 +450,8 @@ impl Collector {
                 .and_then(|rel| held.get(rel).copied())
                 .unwrap_or_default(),
             cgroup_path,
-            short_id: container,
+            short_id,
+            container,
             owner: Some(owner),
             own_netns: net.is_some(),
             io_total: s.io.map(|(r, w)| {
@@ -461,7 +472,7 @@ impl Collector {
             .get(&pid)
             .map(|list| {
                 list.iter()
-                    .map(|c| self.process_node(*c, samples, kids, owners, kernel, held))
+                    .map(|c| self.process_node(*c, samples, kids, owners, kernel, held, enrichment))
                     .collect()
             })
             .unwrap_or_default();

@@ -136,7 +136,7 @@ The result is a 1008 KB static binary, measured on 2026-08-31.
 ## Checking it
 
 ```
-make fast                   fmt, clippy and 163 tests, on your machine
+make fast                   fmt, clippy and 166 tests, on your machine
 make live HOST=your.host    the whole check on a Linux host
 ```
 

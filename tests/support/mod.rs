@@ -7,6 +7,8 @@
 #![allow(dead_code)]
 
 use std::fs;
+use std::io::{Read, Write};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
 pub struct Fixture {
@@ -406,6 +408,63 @@ impl Drop for Fixture {
 
 fn write_file(path: &Path, text: &str) {
     fs::write(path, text).unwrap();
+}
+
+/// A daemon of the test's own, on a unix socket the binary is pointed at with
+/// `--docker-socket`. The enricher speaks plain HTTP/1.1 over that socket, so
+/// what a test needs is not a mock of the enricher but a socket that answers:
+/// the container list, and the single-container inspection the restart count
+/// lives in. The thread ends with the test binary, which is why it is not
+/// joined - a listener blocked in `accept` has nothing to be woken by.
+pub struct FakeDocker {
+    pub path: PathBuf,
+}
+
+impl FakeDocker {
+    /// `list` is the body of `/containers/json`, `restarts` the count every
+    /// inspection reports.
+    pub fn new(name: &str, list: &str, restarts: u64) -> FakeDocker {
+        // Not under the fixture root: a unix socket path is bounded at about a
+        // hundred bytes, and the temporary directory of a Mac spends half of
+        // that before the name begins.
+        let path = std::env::temp_dir().join(format!("hs-{name}-{}.sock", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        let list = list.to_string();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut s = match stream {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                let body = if request.contains("/containers/json") {
+                    list.clone()
+                } else {
+                    format!("{{\"RestartCount\": {restarts}}}")
+                };
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = s.write_all(head.as_bytes());
+                let _ = s.write_all(body.as_bytes());
+            }
+        });
+        FakeDocker { path }
+    }
+
+    pub fn arg(&self) -> &str {
+        self.path.to_str().unwrap()
+    }
+}
+
+impl Drop for FakeDocker {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 /// Runs the built binary and returns its standard output.

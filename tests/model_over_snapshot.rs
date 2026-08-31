@@ -3,7 +3,7 @@
 
 mod support;
 
-use support::{run, Fixture};
+use support::{run, FakeDocker, Fixture};
 
 /// A host running a service, two containers and a login shell. `tick` moves
 /// every cumulative counter forward, which is how a second snapshot is made.
@@ -106,6 +106,41 @@ fn a_container_without_the_socket_degrades_to_its_short_identifier() {
     let after = &text[ssh..ssh + 300];
     assert!(after.contains("\"owner\": \"ssh\""), "{after}");
     assert!(after.contains("\"owner_kind\": \"service\""), "{after}");
+}
+
+/// The container list as the daemon answers it, for the first of the two
+/// containers the fixture runs. The identifier is the one the cgroup name
+/// carries, because that is the key the row is looked up by.
+const DAEMON_LIST: &str = r#"[{"Id":"aaaaaaaaaaaa1111","Names":["/web"],"Image":"nginx:1.27","State":"running","Status":"Up 3 days","Created":1723635000,"Labels":{"com.docker.compose.project":"site"},"Ports":[{"PrivatePort":80,"PublicPort":8080,"Type":"tcp"}]}]"#;
+
+#[test]
+fn the_daemon_answer_reaches_the_row() {
+    // FR-3 asks for the image, the state, the creation time and the restart
+    // count, and the name is only the first of them. The name arrives because
+    // the owner is named from the daemon's answer; the rest has to arrive on
+    // the row itself, or the card has nothing to print but a guess about the
+    // socket.
+    let f = Fixture::new("daemon");
+    build(&f, 0);
+    let daemon = FakeDocker::new("daemon", DAEMON_LIST, 3);
+    let text = run(&[
+        "--cgroup-root",
+        f.cgroup_root().to_str().unwrap(),
+        "--proc-root",
+        f.proc_root().to_str().unwrap(),
+        "--docker-socket",
+        daemon.arg(),
+        "--dump-model",
+        "json",
+    ]);
+    // The socket answered, so the row is named for the container and not for
+    // its identifier.
+    assert!(text.contains("\"owner\": \"web\""), "{text}");
+    assert!(text.contains("\"image\": \"nginx:1.27\""), "{text}");
+    assert!(text.contains("\"state\": \"running\""), "{text}");
+    // The second container is not in the answer, so it stays on its short
+    // identifier - the degraded case of FR-3 and the enriched one on one host.
+    assert!(text.contains("\"owner\": \"bbbbbbbbbbbb\""), "{text}");
 }
 
 #[test]

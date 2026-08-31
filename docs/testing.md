@@ -717,7 +717,7 @@ linter catches layout, not meaning.
 | FR-1, FR-5 | V1 over the snapshot, V2 against the oracle and against `pidstat` and `ps`, invariant 6 |
 | FR-1a | Induced state with a known quota, oracle against `/proc/stat`, invariant 14 |
 | FR-2 | V3: a walk down the forest and back on `Enter` and `BSpace`, the card on every level with `i`, return to the same row |
-| FR-3 | Induced state `--docker-socket none`, a run without root |
+| FR-3 | V1 over a socket the test opens itself and answers on: the image, the state and the restart count the daemon gave reach the row and its card, while a container the answer does not mention stays on its short identifier. Induced state `--docker-socket none`, a run without root; V4: the card says the socket is unreadable only where it is, and says the answer has not arrived where the socket answered about other containers |
 | FR-6 | V1 over a snapshot with 200 nodes, induced state "many nodes"; V4: a filter typed, kept and dropped - the path line names it and counts what it left, `Esc` gives the level back; V4: the bar stands beside the sorted column (D-27) |
 | FR-7 | V3: pause, two consecutive frames match, after release they do not; V4: `-` and `+` walk the interval to both ends of the list and the key line says which one is on |
 | FR-8 | Induced state "without root" with a separate user |

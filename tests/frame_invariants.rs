@@ -4,7 +4,7 @@
 
 mod support;
 
-use support::{frames, run, width, Fixture};
+use support::{frames, run, width, FakeDocker, Fixture};
 
 fn build(f: &Fixture) {
     f.host(1_000_000, 900_000, 4);
@@ -62,13 +62,20 @@ fn build(f: &Fixture) {
 }
 
 fn scenario(f: &Fixture, keys: &str, size: &str) -> Vec<Vec<String>> {
+    scenario_over_socket(f, keys, size, "none")
+}
+
+/// The same walk with a daemon on the other end of the socket. Everything else
+/// is a snapshot, so this is the one thing a test cannot capture into a file:
+/// the answer comes over a socket or it does not come at all (FR-3).
+fn scenario_over_socket(f: &Fixture, keys: &str, size: &str, socket: &str) -> Vec<Vec<String>> {
     let text = run(&[
         "--cgroup-root",
         f.cgroup_root().to_str().unwrap(),
         "--proc-root",
         f.proc_root().to_str().unwrap(),
         "--docker-socket",
-        "none",
+        socket,
         "--dump-frame",
         "1",
         "--tick",
@@ -370,6 +377,67 @@ fn the_self_row_stays_first_under_each_of_the_four_sortings() {
         );
         check_all(&frames, 100);
     }
+}
+
+/// What the daemon answers about the first container of the fixture. The
+/// second one is deliberately absent from the list: one host carries both the
+/// enriched case and the one waiting for an answer, and the card has to tell
+/// them apart.
+const DAEMON_LIST: &str = r#"[{"Id":"aaaaaaaaaaaa1111","Names":["/web"],"Image":"nginx:1.27","State":"running","Status":"Up 3 days","Created":1723635000,"Labels":{"com.docker.compose.project":"site"},"Ports":[{"PrivatePort":80,"PublicPort":8080,"Type":"tcp"}]}]"#;
+
+/// FR-3: the card of a row inside a container prints what the daemon said -
+/// the image, the state and the restart count - and not a guess about the
+/// socket it just read them over.
+#[test]
+fn the_card_of_a_container_names_its_image() {
+    let f = Fixture::new("card-image");
+    build(&f);
+    let daemon = FakeDocker::new("card-image", DAEMON_LIST, 3);
+    let frames = scenario_over_socket(
+        &f,
+        "v / n g i n x - w o r k e r Enter i",
+        "110x36",
+        daemon.arg(),
+    );
+    check_all(&frames, 110);
+    let card = frames.last().unwrap().join("\n");
+    assert!(card.contains("Esc closes the card"), "no card:\n{card}");
+    assert!(
+        card.contains("container       web"),
+        "no container line:\n{card}"
+    );
+    assert!(card.contains("nginx:1.27"), "no image on the card:\n{card}");
+    assert!(card.contains("Up 3 days"), "no state on the card:\n{card}");
+    assert!(card.contains("restarts 3"), "no restart count:\n{card}");
+}
+
+/// FR-3 and D-13: with no socket at all the card says the socket cannot be
+/// read; with a socket that answered about other containers it says the answer
+/// has not arrived. The hint line has always separated the two, and the card
+/// blamed the socket in both cases - on a screen whose other line carried a
+/// name only the daemon could have given.
+#[test]
+fn the_card_separates_a_dead_socket_from_a_missing_answer() {
+    let f = Fixture::new("card-socket");
+    build(&f);
+    let keys = "v / r e d i s Enter i";
+
+    let dead = scenario(&f, keys, "110x36");
+    check_all(&dead, 110);
+    let card = dead.last().unwrap().join("\n");
+    assert!(
+        card.contains("the docker socket is not readable"),
+        "a dead socket must be named as one:\n{card}"
+    );
+
+    let daemon = FakeDocker::new("card-socket", DAEMON_LIST, 0);
+    let waiting = scenario_over_socket(&f, keys, "110x36", daemon.arg());
+    check_all(&waiting, 110);
+    let card = waiting.last().unwrap().join("\n");
+    assert!(
+        card.contains("has not arrived from the socket yet"),
+        "a socket that answered must not be called unreadable:\n{card}"
+    );
 }
 
 #[test]

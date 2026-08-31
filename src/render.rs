@@ -970,6 +970,7 @@ fn owner_hint(sel: &Node, docker_available: bool) -> String {
 /// daemon gave; a service and a user get their name, which is all there is.
 fn owner_lines(
     node: &Node,
+    docker_available: bool,
     kv: &dyn Fn(&str, String, &mut Vec<Line<'static>>),
     note: &dyn Fn(String, &mut Vec<Line<'static>>),
     lines: &mut Vec<Line<'static>>,
@@ -1023,9 +1024,17 @@ fn owner_lines(
                         kv("labels", labels.join("  "), lines);
                     }
                 }
+                // The hint line under the table already separates these two
+                // states (`owner_hint`); the card said "not readable" whatever the
+                // socket was doing, so one screen carried a name that only the
+                // daemon could have given and a sentence denying the daemon.
                 None => kv(
                     "image",
-                    "unavailable - the docker socket is not readable".to_string(),
+                    if docker_available {
+                        "unavailable - the answer has not arrived from the socket yet".to_string()
+                    } else {
+                        "unavailable - the docker socket is not readable".to_string()
+                    },
                     lines,
                 ),
             }
@@ -1409,7 +1418,7 @@ fn card_lines(app: &App, u: usize, content: usize, out: &mut Vec<Line<'static>>)
                     kv(if i == 0 { label } else { "" }, part, &mut lines);
                 }
             }
-            owner_lines(&node, &kv, &note, &mut lines);
+            owner_lines(&node, app.view().docker_available, &kv, &note, &mut lines);
         }
         Kind::Host => {
             kv(
