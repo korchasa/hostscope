@@ -18,7 +18,9 @@ it cannot read as unavailable rather than showing a zero.
 
 ## What it shows
 
-![A level of a Kubernetes node in hostscope](docs/screenshot.png)
+![The process forest of a Docker host, sorted by network](docs/screenshot-tree.png)
+
+![The card of a process running in a container](docs/screenshot-card.png)
 
 ```
 hostscope - an interactive viewer of the current host state

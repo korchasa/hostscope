@@ -27,8 +27,11 @@ readme = (root / "README.md").read_text()
 start = readme.index(HEAD) + len(HEAD)
 end = readme.index(NEXT, start) + 1
 
-screenshot = "![A level of a Kubernetes node in hostscope](docs/screenshot.png)"
-section = f"\n{screenshot}\n\n```\n{help_text}\n```\n"
+# Two pictures, because the tree and the card answer different questions: the
+# first says who is eating the host, the second says what that one process is.
+tree = "![The process forest of a Docker host, sorted by network](docs/screenshot-tree.png)"
+card = "![The card of a process running in a container](docs/screenshot-card.png)"
+section = f"\n{tree}\n\n{card}\n\n```\n{help_text}\n```\n"
 
 (root / "README.md").write_text(readme[:start] + section + readme[end:])
 print("README.md: the help text is the one the binary prints")
