@@ -2160,8 +2160,11 @@ worth carrying next to the requirements:
   The hooks of FR-17 are not in the help and so not in the README either
   (operator decision 2026-09-02): they parse, and section 4 of
   `docs/testing.md` is where they are written down. A reader looking for
-  the process eating their host has no use for `--dump-style`, and the
-  same test that carries the help into the README keeps them out of it.
+  the process eating their host has no use for `--dump-style`. A test of
+  its own names every hook and reads both the help and the README,
+  because a block dropped from the help stays on the page until `make
+  readme` runs, and the test that carries the help across looks only for
+  what the help says, never for what the page says back.
 - The code is under git.
 
 ### Mandatory rules of the screen

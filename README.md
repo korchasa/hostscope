@@ -54,11 +54,6 @@ hostscope - an interactive viewer of the current host state
 
 usage: hostscope [options]
 
-  --tick MS               the interval to start at, in milliseconds
-                          (default 3000; - and + move it while running)
-  --docker-socket PATH    the docker socket, or 'none' to disable enrichment
-  --no-etc-passwd         do not read /etc/passwd; the OWNER column and the
-                          card then show the uid instead of the login name
   --theme NAME            the palette to open in: classic, panel, gruvbox,
                           solarized, nord, dracula, tokyo-night, catppuccin
                           (t walks them while running; HOSTSCOPE_THEME sets
@@ -70,8 +65,7 @@ usage: hostscope [options]
 Besides /proc and /sys/fs/cgroup the application opens one more file for
 data: /etc/passwd, once at start, to turn the uid of a login session
 into the name the OWNER column shows. It keeps nothing from that file
-but the number and the name. --no-etc-passwd leaves it unopened, and the
-column then shows the number.
+but the number and the name.
 
 The tree is the process forest of the host: every row is a process, and
 it stands under the process that started it. What runs a process - a

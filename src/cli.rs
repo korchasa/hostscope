@@ -1,13 +1,14 @@
-//! Command line. Besides the ordinary options it carries the verification
-//! hooks of FR-17: substitution of data sources, dumps of the model and of the
-//! frame, a key program and a log to file.
+//! Command line. Besides `--theme` it carries the verification hooks of FR-17:
+//! substitution of data sources, dumps of the model and of the frame, a key
+//! program, a fixed tick, a log to file, another socket, and leaving the
+//! account database unopened.
 //!
-//! They parse here but they are not in `USAGE`. The help is what the README is
-//! written from, and the README is for someone who wants to run this, not for
-//! someone who works on it - a reader looking for a process eating the host
-//! does not need `--dump-style`. Section 4 of `docs/testing.md` documents each
-//! hook and what it proves, and `tests/documents.rs` fails if one gets back
-//! into the help.
+//! They all parse here and none of them is in `USAGE`, which lists `--theme`
+//! and nothing else. The help is what the README is written from, and the
+//! README is for someone who wants to run this, not for someone who works on
+//! it - a reader looking for a process eating the host does not need
+//! `--dump-style`. Section 4 of `docs/testing.md` documents each hook and what
+//! it proves, and `tests/documents.rs` fails if one gets back into the help.
 
 use std::path::PathBuf;
 
@@ -19,11 +20,6 @@ hostscope - an interactive viewer of the current host state
 
 usage: hostscope [options]
 
-  --tick MS               the interval to start at, in milliseconds
-                          (default 3000; - and + move it while running)
-  --docker-socket PATH    the docker socket, or 'none' to disable enrichment
-  --no-etc-passwd         do not read /etc/passwd; the OWNER column and the
-                          card then show the uid instead of the login name
   --theme NAME            the palette to open in: classic, panel, gruvbox,
                           solarized, nord, dracula, tokyo-night, catppuccin
                           (t walks them while running; HOSTSCOPE_THEME sets
@@ -34,7 +30,7 @@ usage: hostscope [options]
 Besides /proc and /sys/fs/cgroup the application opens one more file for data:
 /etc/passwd, once at start, to turn the uid of a login session into the name
 the OWNER column shows. It keeps nothing from that file but the number and the
-name. --no-etc-passwd leaves it unopened, and the column then shows the number.
+name.
 
 The tree is the process forest of the host: every row is a process, and it
 stands under the process that started it. What runs a process - a container, a

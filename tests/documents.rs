@@ -49,6 +49,12 @@ fn flatten(s: &str) -> String {
 #[test]
 fn the_help_keeps_the_verification_hooks_out() {
     let help = run(&["--help"]);
+    // The README as well, and not only through the help: a block dropped from
+    // `USAGE` stays in `README.md` until `make readme` runs, and the test that
+    // carries the help across cannot see it, because it only looks for what
+    // the help says and never for what the page says back.
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))
+        .expect("README.md is part of the repository");
     for hook in [
         "--proc-root",
         "--cgroup-root",
@@ -58,15 +64,22 @@ fn the_help_keeps_the_verification_hooks_out() {
         "--keys",
         "--size",
         "--log",
+        "--tick",
+        "--docker-socket",
+        "--no-etc-passwd",
     ] {
         assert!(
             !help.contains(hook),
             "--help names {hook}, a verification hook; section 4 of docs/testing.md is where those live"
         );
+        assert!(
+            !readme.contains(hook),
+            "README.md names {hook}, a verification hook; run `make readme`"
+        );
     }
     // The other half of the same rule: what a reader who only wants to run it
     // does need must not be swept out with them.
-    for option in ["--tick", "--docker-socket", "--no-etc-passwd", "--theme"] {
+    for option in ["--theme", "--help", "--version"] {
         assert!(
             help.contains(option),
             "--help no longer names {option}, which someone running the application needs"
