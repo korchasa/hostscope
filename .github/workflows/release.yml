@@ -1,8 +1,9 @@
 # A released version is a tag, and the page that announces it is written by
-# the tag itself: the annotation is the notes, so the words are chosen once,
-# where the tag is made, and cannot drift from what was released. Nothing is
-# built here - the check workflow already built and tested this commit, and a
-# binary attached from a runner would be a build nobody measured on a host.
+# the tag itself: the annotation is the title and the notes, so the words are
+# chosen once, where the tag is made, and cannot drift from what was released.
+# Nothing is built here - the check workflow already built and tested this
+# commit, and a binary attached from a runner would be a build nobody measured
+# on a host.
 name: release
 
 on:
@@ -10,7 +11,8 @@ on:
     tags:
       - "v*"
 
-# Creating the page is a write, and the default token cannot do it.
+# Creating the page is a write, and the repository hands workflows a read-only
+# token by default.
 permissions:
   contents: write
 
@@ -18,12 +20,26 @@ jobs:
   page:
     runs-on: ubuntu-latest
     steps:
-      # `gh` reads the annotation out of the local repository, so the tag
-      # object itself has to come along - a shallow checkout of the tagged
-      # commit does not carry it.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # `actions/checkout` fetches the tagged commit straight onto the tag's own
+      # ref - `+<sha>:refs/tags/<tag>` - which replaces the annotated object
+      # with a light one pointing at the commit. Everything below then reads the
+      # commit message instead of the annotation, which is exactly how the first
+      # v0.1.1 page came out carrying a commit message and no title. Fetching the
+      # tag ref again by force puts the annotation back.
+      - name: the annotation the tag was made with
+        run: |
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          if [ "$(git cat-file -t "$GITHUB_REF_NAME")" != "tag" ]; then
+            echo "$GITHUB_REF_NAME carries no annotation, so there is nothing to announce" >&2
+            exit 1
+          fi
+          git tag --list --format='%(contents:subject)' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/title"
+          git tag --list --format='%(contents:body)' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes"
+          echo "the title will be: $(cat "$RUNNER_TEMP/title")"
 
       # A tag naming a version the binary does not report is the failure this
       # step exists for: `--version` prints what `Cargo.toml` says, and nothing
@@ -42,4 +58,7 @@ jobs:
       - name: the page
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --verify-tag --notes-from-tag
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "$(cat "$RUNNER_TEMP/title")" \
+            --notes-file "$RUNNER_TEMP/notes"
