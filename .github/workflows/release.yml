@@ -1,64 +1,111 @@
-# A released version is a tag, and the page that announces it is written by
-# the tag itself: the annotation is the title and the notes, so the words are
-# chosen once, where the tag is made, and cannot drift from what was released.
-# Nothing is built here - the check workflow already built and tested this
-# commit, and a binary attached from a runner would be a build nobody measured
-# on a host.
+# A fix or a feature on main releases itself. Nothing is typed by hand: the
+# commits since the last tag decide the number, `scripts/next-version.sh` says
+# what the policy is, and the page is written from the same commits that earned
+# it. Chosen by the operator on 2026-09-01, against the two slower options - one
+# command on a laptop, or a button here.
+#
+# Nothing is built for the page. The check below is the whole suite, and the
+# binary that matters is cross built for the host it will run on.
 name: release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
 
-# Creating the page is a write, and the repository hands workflows a read-only
-# token by default.
+# Committing the version and pushing the tag are writes, and the repository
+# hands workflows a read-only token by default.
 permissions:
   contents: write
 
+# Two pushes landing in the same minute must not each cut a version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  page:
+  decide:
     runs-on: ubuntu-latest
+    outputs:
+      next: ${{ steps.read.outputs.next }}
+    steps:
+      # The whole history, because the policy counts commits back to the last
+      # version tag.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The policy is a script, so it can be wrong in the ordinary way. It
+      # checks itself against a temporary repository before anything trusts it.
+      - run: scripts/next-version.sh --self-test
+
+      - id: read
+        run: |
+          next=$(scripts/next-version.sh)
+          if [ -z "$next" ]; then
+            echo "nothing since the last tag asks for a release"
+          else
+            echo "the commits since the last tag ask for $next"
+          fi
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: decide
+    if: needs.decide.outputs.next != ''
+    runs-on: ubuntu-latest
+    env:
+      NEXT: ${{ needs.decide.outputs.next }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # `actions/checkout` fetches the tagged commit straight onto the tag's own
-      # ref - `+<sha>:refs/tags/<tag>` - which replaces the annotated object
-      # with a light one pointing at the commit. Everything below then reads the
-      # commit message instead of the annotation, which is exactly how the first
-      # v0.1.1 page came out carrying a commit message and no title. Fetching the
-      # tag ref again by force puts the annotation back.
-      - name: the annotation the tag was made with
+      # The words of the release are the words of the commits that earned it,
+      # read before the version commit exists so it does not describe itself.
+      - name: what this release says
         run: |
-          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
-          if [ "$(git cat-file -t "$GITHUB_REF_NAME")" != "tag" ]; then
-            echo "$GITHUB_REF_NAME carries no annotation, so there is nothing to announce" >&2
-            exit 1
-          fi
-          git tag --list --format='%(contents:subject)' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/title"
-          git tag --list --format='%(contents:body)' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes"
-          echo "the title will be: $(cat "$RUNNER_TEMP/title")"
+          last=$(git describe --tags --abbrev=0 --match 'v*')
+          git log --reverse --format='### %s%n%n%b' "${last}..HEAD" \
+            | grep -v '^Co-Authored-By: ' \
+            | cat -s > "$RUNNER_TEMP/notes"
+          printf 'hostscope %s\n\n' "$NEXT" > "$RUNNER_TEMP/tag-message"
+          cat "$RUNNER_TEMP/notes" >> "$RUNNER_TEMP/tag-message"
 
-      # A tag naming a version the binary does not report is the failure this
-      # step exists for: `--version` prints what `Cargo.toml` says, and nothing
-      # else compares the two. Refusing here leaves the tag in place to be
-      # fixed, rather than announcing the wrong number.
-      - name: the tag and the crate agree on the version
+      # Only the first `version =` line, which is the package's own - a `sed`
+      # over the whole file would also rewrite a dependency written as its own
+      # section, and would do it silently.
+      - name: the version the binary will report
         run: |
-          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          tag=${GITHUB_REF_NAME#v}
-          if [ "$crate" != "$tag" ]; then
-            echo "tag $GITHUB_REF_NAME says $tag, Cargo.toml says $crate" >&2
-            exit 1
-          fi
-          echo "both say $crate"
+          python3 - <<'PY'
+          import os, pathlib, re
+          p = pathlib.Path("Cargo.toml")
+          new, n = re.subn(
+              r'^version = "[^"]*"$',
+              'version = "%s"' % os.environ["NEXT"],
+              p.read_text(), count=1, flags=re.M)
+          assert n == 1, "no package version line in Cargo.toml"
+          p.write_text(new)
+          PY
+          grep -q "^version = \"${NEXT}\"$" Cargo.toml
 
-      - name: the page
+      # The suite runs again here, on the manifest this release actually ships.
+      # The check workflow ran on the same code a minute ago, but it did not see
+      # this commit, and a release that publishes an unproven build is the one
+      # failure this job must not have. `cargo` writes the new number into
+      # `Cargo.lock` on the way.
+      - name: it passes before it ships
+        run: |
+          rustup component add rustfmt clippy
+          make fast
+
+      - name: the commit, the tag and the page
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --verify-tag \
-            --title "$(cat "$RUNNER_TEMP/title")" \
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit Cargo.toml Cargo.lock -m "build: hostscope ${NEXT}"
+          git tag -a "v${NEXT}" -F "$RUNNER_TEMP/tag-message"
+          git push origin main "refs/tags/v${NEXT}"
+          gh release create "v${NEXT}" --verify-tag \
+            --title "hostscope ${NEXT}" \
             --notes-file "$RUNNER_TEMP/notes"
