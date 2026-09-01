@@ -8,15 +8,37 @@ mod support;
 
 use support::run;
 
+/// The help no longer arrives as one block: `scripts/readme-help.py` fences the
+/// tables of options and keys, where the columns carry the meaning, and lets
+/// the paragraphs be paragraphs, rewrapped for the page. So a table is looked
+/// for as it stands and a paragraph with its spacing flattened - what is held
+/// identical is the words, not the line breaks around them.
 #[test]
 fn the_readme_carries_the_help_text() {
     let help = run(&["--help"]);
     let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))
         .expect("README.md is part of the repository");
-    assert!(
-        readme.contains(help.trim_end()),
-        "README.md does not carry what --help prints; run `make readme`"
-    );
+    let flat = flatten(&readme);
+
+    let mut blocks = 0;
+    for block in help.trim().split("\n\n") {
+        blocks += 1;
+        let found = if block.lines().any(|l| l.starts_with("  ")) {
+            readme.contains(block)
+        } else {
+            flat.contains(&flatten(block))
+        };
+        let first = block.lines().next().unwrap_or_default();
+        assert!(
+            found,
+            "README.md is missing the help block starting \"{first}\"; run `make readme`"
+        );
+    }
+    assert!(blocks > 1, "the help text did not split into blocks");
+}
+
+fn flatten(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// A screenshot that has been renamed or dropped leaves a broken picture on the

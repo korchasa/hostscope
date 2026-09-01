@@ -2149,7 +2149,14 @@ worth carrying next to the requirements:
   --help` prints, copied in by `make readme` and held identical by a test
   (`tests/documents.rs`). The help text is the one place that describes
   the interface, so the two cannot drift apart and leave a reader
-  trusting the older of them.
+  trusting the older of them. It is copied block by block rather than as
+  one lump: the tables of options and keys keep their columns inside a
+  fence, and the paragraphs are rewrapped for the page, because two
+  thirds of that text are ordinary prose and a fence renders it as grey
+  monospace nobody reads. The test holds each block, exactly for a table
+  and word for word for a paragraph. What the README says by hand is what
+  the help does not cover: which hosts it reads, why the tools that
+  already exist were not enough, how it is built and checked.
 - The code is under git.
 
 ### Mandatory rules of the screen

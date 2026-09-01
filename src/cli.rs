@@ -24,7 +24,8 @@ usage: hostscope [options]
                           c calm, u unusual, a alarm, b bar, s selected,
                           m matched
   --keys \"Right a Esc\"    run a key program and stop
-  --size WxH              frame size for --dump-frame (default 100x30)
+  --size WxH              frame size for --dump-frame and --dump-style
+                          (default 100x30)
   --log FILE              write the log to FILE; never to the terminal
   --no-etc-passwd         do not read /etc/passwd; the OWNER column and the
                           card then show the uid instead of the login name
@@ -89,11 +90,11 @@ sits on is marked in its name column: '!' where something is wrong, '*' where
 it is worth a look, and a down arrow where the row is only the way down to the
 process that carries it. Every figure is the sum of a subtree, so without that
 distinction one busy process would mark every row above it up to the root. The
-reading is absolute - a share of what this machine has,
-or a state the kernel reports, such as a process left dead or stuck in the
-kernel. It is never a comparison against the other rows on screen, so a quiet
-machine stays quiet. Disk read and write carry no colour: nothing readable says
-what the device underneath can do. The bar keeps comparing the rows of the
+reading is absolute - a share of what this machine has, or a state the kernel
+reports, such as a process left dead or stuck in the kernel. It is never a
+comparison against the other rows on screen, so a quiet machine stays quiet.
+Disk read and write carry no colour: nothing readable says what the device
+underneath can do. The bar keeps comparing the rows of the
 level, so a long bar beside a calm figure means large here, not large for this
 machine. The card of a marked row says why it is marked: one line per rule that
 fired, named after the card row its figure stands on, and naming that figure in
