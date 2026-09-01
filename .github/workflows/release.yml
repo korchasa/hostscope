@@ -1,0 +1,45 @@
+# A released version is a tag, and the page that announces it is written by
+# the tag itself: the annotation is the notes, so the words are chosen once,
+# where the tag is made, and cannot drift from what was released. Nothing is
+# built here - the check workflow already built and tested this commit, and a
+# binary attached from a runner would be a build nobody measured on a host.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Creating the page is a write, and the default token cannot do it.
+permissions:
+  contents: write
+
+jobs:
+  page:
+    runs-on: ubuntu-latest
+    steps:
+      # `gh` reads the annotation out of the local repository, so the tag
+      # object itself has to come along - a shallow checkout of the tagged
+      # commit does not carry it.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A tag naming a version the binary does not report is the failure this
+      # step exists for: `--version` prints what `Cargo.toml` says, and nothing
+      # else compares the two. Refusing here leaves the tag in place to be
+      # fixed, rather than announcing the wrong number.
+      - name: the tag and the crate agree on the version
+        run: |
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$crate" != "$tag" ]; then
+            echo "tag $GITHUB_REF_NAME says $tag, Cargo.toml says $crate" >&2
+            exit 1
+          fi
+          echo "both say $crate"
+
+      - name: the page
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --notes-from-tag

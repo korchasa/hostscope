@@ -133,6 +133,11 @@ cargo build --release --target x86_64-unknown-linux-musl
 
 The result is a 1008 KB static binary, measured on 2026-08-31.
 
+A released version is a tag of the form `v0.1.1`, and the page announcing
+it on GitHub is written from that tag's own annotation. No binary is
+attached: the one that matters is built for the host it will run on, by
+the two commands above.
+
 ## Checking it
 
 ```
