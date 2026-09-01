@@ -56,19 +56,7 @@ usage: hostscope [options]
 
   --tick MS               the interval to start at, in milliseconds
                           (default 3000; - and + move it while running)
-  --cgroup-root DIR       read a captured snapshot instead of /sys/fs/cgroup
-  --proc-root DIR         read a captured snapshot instead of /proc
   --docker-socket PATH    the docker socket, or 'none' to disable enrichment
-  --dump-model json       print the tree model as numbers to stdout and exit
-  --dump-frame N          render N frames as text to stdout and exit
-  --dump-style N          the same N frames, each followed by a map of the
-                          same shape naming the role of every cell: . plain,
-                          c calm, u unusual, a alarm, b bar, s selected,
-                          m matched
-  --keys "Right a Esc"    run a key program and stop
-  --size WxH              frame size for --dump-frame and --dump-style
-                          (default 100x30)
-  --log FILE              write the log to FILE; never to the terminal
   --no-etc-passwd         do not read /etc/passwd; the OWNER column and the
                           card then show the uid instead of the login name
   --theme NAME            the palette to open in: classic, panel, gruvbox,
@@ -78,10 +66,6 @@ usage: hostscope [options]
   -h, --help              this text
   -V, --version           version
 ```
-
-Dumps go to standard output. FR-10 forbids writing outside the log named
-on the command line, and a verification hook is no reason to make an
-exception.
 
 Besides /proc and /sys/fs/cgroup the application opens one more file for
 data: /etc/passwd, once at start, to turn the uid of a login session

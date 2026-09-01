@@ -41,6 +41,39 @@ fn flatten(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The help is for someone who wants to run the application, not for someone
+/// who works on it. The hooks of FR-17 still work and are documented where a
+/// reader who needs them already is - section 4 of `docs/testing.md`. Keeping
+/// them out of the help keeps them out of the README too, because the README
+/// is written from the help.
+#[test]
+fn the_help_keeps_the_verification_hooks_out() {
+    let help = run(&["--help"]);
+    for hook in [
+        "--proc-root",
+        "--cgroup-root",
+        "--dump-model",
+        "--dump-frame",
+        "--dump-style",
+        "--keys",
+        "--size",
+        "--log",
+    ] {
+        assert!(
+            !help.contains(hook),
+            "--help names {hook}, a verification hook; section 4 of docs/testing.md is where those live"
+        );
+    }
+    // The other half of the same rule: what a reader who only wants to run it
+    // does need must not be swept out with them.
+    for option in ["--tick", "--docker-socket", "--no-etc-passwd", "--theme"] {
+        assert!(
+            help.contains(option),
+            "--help no longer names {option}, which someone running the application needs"
+        );
+    }
+}
+
 /// A screenshot that has been renamed or dropped leaves a broken picture on the
 /// front page of the repository, and nothing else notices: the file is not
 /// compiled, not linted, and read by no other test. This walks the links the

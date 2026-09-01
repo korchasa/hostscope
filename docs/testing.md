@@ -166,6 +166,13 @@ screen, and that cannot tell an arithmetic error from a layout error.
 They are now in the requirements as FR-17 (operator decision
 2026-08-14); here is how they are used.
 
+This list is the only place they are written down. `--help` names the
+options someone running the application needs and nothing else (operator
+decision 2026-09-02), because the README is generated from that help and
+a reader looking for the process eating their host has no use for
+`--dump-style`. The hooks still parse, and `tests/documents.rs` fails if
+one of them turns up in the help again.
+
 - `--cgroup-root DIR` and `--proc-root DIR` - read a captured snapshot
   instead of the live `/sys/fs/cgroup` and `/proc`. Gives repeatable
   tests with no live host involved.
@@ -758,7 +765,7 @@ linter catches layout, not meaning.
 | D-26 | Invariant 8: the `OWNER` column is demanded on every frame, no longer only where it happens to be drawn |
 | D-30 | V1 over a snapshot holding a shim with one child in a container: the row names the container in parentheses and keeps its own owner, a row with two containers under it names neither, and the filter typed with the container name finds the row that leads into it |
 | D-31 | V1 over a snapshot laid out as a Kubernetes node: a shim with the pod sandbox and the workload container under it names the pod, a shim whose two children sit in different pods names nothing, and the parser reads the pod out of both cgroup driver layouts |
-| Section 11 | `tests/documents.rs`: what `--help` prints stands in `README.md` word for word, so the description of the screen has one source and `make readme` is what moves it |
+| Section 11 | `tests/documents.rs`: every block of what `--help` prints stands in `README.md` - a table as it is written, a paragraph word for word - so the description of the screen has one source and `make readme` is what moves it. The same test holds the hooks of section 4 out of `--help`, and opens every picture the README shows |
 | D-32 | V1 over a snapshot with the files, limits and PSS of a process: the card heads its two figure columns once, starts every `now` and every `avg` at the same cell, and gives `own virtual`, `own PSS`, `sockets`, `nofile` and `nproc` a label each |
 | D-33 | V1 over a snapshot with a command line longer than the terminal: `pid`, `parent`, `user`, `threads` and `started` each have a label, the command wraps under its own label with nothing lost, and invariant 1 holds on every wrapped line. At 70 and 60 cells the explanations beside the figures and the cgroup path are whole once the wrapped lines are joined, and a pid the room cannot hold is marked as cut rather than broken |
 | D-34 | V1 over a snapshot: the card of a process whose `VmSwap` says 2048 kB shows `own swap  2.0M`, and the card of a process with no `status` file shows the row with `n/a` rather than leaving it out |

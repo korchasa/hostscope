@@ -2157,6 +2157,11 @@ worth carrying next to the requirements:
   and word for word for a paragraph. What the README says by hand is what
   the help does not cover: which hosts it reads, why the tools that
   already exist were not enough, how it is built and checked.
+  The hooks of FR-17 are not in the help and so not in the README either
+  (operator decision 2026-09-02): they parse, and section 4 of
+  `docs/testing.md` is where they are written down. A reader looking for
+  the process eating their host has no use for `--dump-style`, and the
+  same test that carries the help into the README keeps them out of it.
 - The code is under git.
 
 ### Mandatory rules of the screen
